@@ -1,7 +1,7 @@
 % interfaccia per gestire i nodi kademlia
 
--module(node).
--behaviour(gen_server).
+-module(nodo).
+%-behaviour(gen_server).
 
 -export([init/1, start_link/2, ping/2]).
 -export([handle_call/3]).
@@ -12,7 +12,13 @@
 -record(state, {id, k_buckets, storage, timer}).
 
 % inizializzazione
-init(Id) -> {ok, #state{id = Id, k_buckets = vuoto, storage = vuoto, timer = 0}}.
+init(Id) ->
+    {ok, #state{
+        id = Id,
+        k_buckets = ets:new(buckets, [ordered_set, named_table]),
+        storage = vuoto,
+        timer = 0
+    }}.
 
 % avvio del nodo (CAPIRE DOVE USARE LA SPAWN)
 start_link(Id, Options) -> gen_server:start_link({local, Id}, ?MODULE, Id, Options).

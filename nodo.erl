@@ -1,57 +1,78 @@
 % interfaccia per gestire i nodi kademlia
 
 -module(nodo).
-%-behaviour(gen_server).
+-include_lib("stdlib/include/qlc.hrl").
 
--export([init/1, start_link/2, ping/2, start_system/1]).
--export([handle_call/3]).
+-export([start_system/1, new_erlang_node/1, node_behavior/0]).
+% gestione dei record per la tebella di bostrap
+-record(bootstrap_table, {id, pid, last_ping}).
 
-% un nodo kademlia ha un proprio stato,
-% ovvero un insieme di informazioni,
-% quali id, k_buckets, storage, timer
--record(state, {id, k_buckets, storage, timer}).
+% creazione di un nuovo nodo
+new_erlang_node(P) ->
+    % TODO: inizializzare lo Storage
+    Pid = spawn(nodo, node_behavior, []),
+    P ! {ok, Pid}.
 
-% inizializzazione
-init(Id) ->
-    {ok, #state{
-        id = Id,
-        k_buckets = ets:new(buckets, [ordered_set, named_table]),
-        storage = vuoto,
-        timer = 0
-    }}.
-
-% avvio del nodo (CAPIRE DOVE USARE LA SPAWN)
-start_link(Id, Options) -> gen_server:start_link({local, Id}, ?MODULE, Id, Options).
-
-% implementazione delle interfacce di base
-
-% ping
-ping(NodeId, FromId) -> gen_server:call(NodeId, {ping, FromId}).
-
-handle_call({ping, FromId}, _From, State) ->
-    io:format("PING received from ~p~n", [FromId]),
-    {reply, pong, State}.
+% definizione del comportamento di un nodo kademlia generico
+node_behavior() ->
+    receive
+        {pingTO, To} ->
+            io:format("TODO ~p", [To]),
+            node_behavior()
+    end.
 
 % inizializzazione della rete di kademlia con la
 % creazione del nodo boostrapt
 start_system(P) ->
+    mnesia:create_schema([node()]),
     mnesia:start(),
-    mnesia:create_table(boostrapt_table, [
-        {attributes, record_info(fields, state)},
-        {type, set}
+    mnesia:create_table(bootstrap_table, [
+        {attributes, record_info(fields, bootstrap_table)},
+        {type, set},
+        {disc_copies, [node()]}
     ]),
+    % generazione di un Id casuale
     NodeId = rand:uniform(1 bsl 160 - 1),
     Pid = spawn(fun() -> bootstrap_node_loop(NodeId) end),
     P ! {ok, Pid}.
 
 % il nodo boostrapt e' considerato come una sorta di server
 bootstrap_node_loop(Id) ->
-    io:format("Nodo bootstrap avviato con ID: ~p~n", [Id]),
+    % segnalo che è stato avviato con successo
+    io:format("Nodo bootstrap pronto con ID: ~p~n", [Id]),
     receive
+        % messaggio che definisce il ping al boostrap
         {ping, From} ->
-            io:format("[[--BOOSTRAP--]]Ping ricevuto da: ~p~n", [From]),
+            io:format("[[--BOOSTRAP--]] --> Ping ricevuto da: ~p~n .", [From]),
             bootstrap_node_loop(Id);
+        % richiesta di un nodo di entrare nella rete
+        {enter, From} ->
+            io:format("[[--BOOSTRAP--]] --> Richiesta di entrare nella rete da da: ~p~n .", [From]),
+            % creazione id del nuovo nodo
+            NodeId = rand:uniform(1 bsl 160 - 1),
+            % transazione per aggiungere un nodo alla tabella mnesia
+            %Tran = fun() ->
+            %   mnesia:write(#boostrap_table{
+            %      id = NodeId, pid = From, last_ping = 0
+            % })
+            %end,
+            % esecuzione della transazione, inserimento del nodo
+            % nella tabella mnesia del boostrap
+            %mnesia:transaction(Tran),
+            % Transazione per aggiungere il nodo nella tabella Mnesia
+            case
+                mnesia:transaction(fun() ->
+                    mnesia:write(#bootstrap_table{id = NodeId, pid = From, last_ping = 0})
+                end)
+            of
+                {_, ok} ->
+                    io:format("[[--BOOSTRAP--]] Nodo aggiunto con successo: ~p~n", [NodeId]);
+                {_, Reason} ->
+                    io:format("[[--BOOSTRAP--]] Errore durante l'aggiunta del nodo: ~p~n", [Reason])
+            end,
+            bootstrap_node_loop(Id);
+        % messaggio generico
         _ ->
-            io:format("[[--BOOSTRAP--]] Messaggio sconosciuto"),
+            io:format("[[--BOOSTRAP--]] --> Messaggio sconosciuto."),
             bootstrap_node_loop(Id)
     end.

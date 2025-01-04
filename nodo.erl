@@ -3,22 +3,31 @@
 -module(nodo).
 -include_lib("stdlib/include/qlc.hrl").
 
--export([start_system/1, new_erlang_node/1, node_behavior/0]).
+-export([start_system/1, new_erlang_node/1, node_behavior/1]).
 % gestione dei record per la tebella di bostrap
 -record(bootstrap_table, {id, pid, last_ping}).
 
 % creazione di un nuovo nodo
 new_erlang_node(P) ->
     % TODO: inizializzare lo Storage
-    Pid = spawn(nodo, node_behavior, []),
+    InitialValues = {"idTMP", [], [], 0},
+    Pid = spawn(fun() -> node_behavior(InitialValues) end),
     P ! {ok, Pid}.
 
 % definizione del comportamento di un nodo kademlia generico
-node_behavior() ->
+node_behavior({Id, Storage, K_buckets, Timer}) ->
     receive
-        {pingTO, To} ->
-            io:format("TODO ~p", [To]),
-            node_behavior()
+        {getInfo} ->
+            io:format("Id: ~p - Storage: ~p - K_buckets: ~p - Timer: ~p. ", [
+                Id, Storage, K_buckets, Timer
+            ]),
+            node_behavior({Id, Storage, K_buckets, Timer});
+        {pingTo, To} ->
+            io:format("Ping ricevuto da: ~p", [To]),
+            node_behavior({Id, Storage, K_buckets, Timer});
+        % modifica del tabella dei k_buckets
+        {refresh, {Idx, Lista}} ->
+            node_behavior({Idx, Storage, Lista, Timer})
     end.
 
 % inizializzazione della rete di kademlia con la
@@ -66,7 +75,10 @@ bootstrap_node_loop(Id) ->
                 end)
             of
                 {_, ok} ->
-                    io:format("[[--BOOSTRAP--]] Nodo aggiunto con successo: ~p~n", [NodeId]);
+                    io:format("[[--BOOSTRAP--]] Nodo aggiunto con successo: ~p~n", [NodeId]),
+                    % assegnazione dell'Id e della K_buckets al nodo che entra
+                    Buckets = [],
+                    From ! {refresh, {NodeId, Buckets}};
                 {_, Reason} ->
                     io:format("[[--BOOSTRAP--]] Errore durante l'aggiunta del nodo: ~p~n", [Reason])
             end,

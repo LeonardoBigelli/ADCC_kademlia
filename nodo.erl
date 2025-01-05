@@ -44,6 +44,12 @@ start_system(P) ->
     NodeId = rand:uniform(1 bsl 160 - 1),
     Pid = spawn(fun() -> bootstrap_node_loop(NodeId) end),
     P ! {ok, Pid}.
+%   Verifica se ciò può andare bene.
+%     % aggiunta del nodo bootstrap alla tabella mnesia
+%    mnesia:transaction(fun() ->
+%        mnesia:write(#bootstrap_table{id = NodeId, pid = Pid, last_ping = 0})
+%    end),
+%    P ! {ok, Pid}.
 
 % il nodo boostrapt e' considerato come una sorta di server
 bootstrap_node_loop(Id) ->
@@ -109,6 +115,7 @@ print_all() ->
     ).
 
 % funzione invocata per fornire ad un nodo, la sua lista k_buckets
+% Nota Arlind: rinominiamo la funzione in get_buckets.
 get_4_buckets(NodeId) ->
     Tran = fun() ->
         % Ottieni tutti i record nella tabella

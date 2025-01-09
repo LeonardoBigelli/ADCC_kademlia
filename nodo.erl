@@ -34,7 +34,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
         % modifica del tabella dei k_buckets
         {refresh, {Idx, Lista}} ->
             node_behavior({Idx, Storage, Lista, Timer});
-        {storage, Value} ->
+        {stora, Value} ->
             Key = crypto:hash(sha256, Value),
             NewStorage = [[Key, Value] | Storage],
             node_behavior({Id, NewStorage, K_buckets, Timer});

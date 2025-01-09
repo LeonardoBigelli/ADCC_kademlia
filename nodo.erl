@@ -9,10 +9,16 @@
 
 % creazione di un nuovo nodo
 new_erlang_node(P) ->
-    % TODO: inizializzare lo Storage
-    InitialValues = {"idTMP", [], [], 0},
+    % valore casuale (stringa)
+    Storage = generate_random_string(16),
+    Key = crypto:hash(sha256, Storage),
+    InitialValues = {"idTMP", [[Key, Storage]], [], 0},
     Pid = spawn(fun() -> node_behavior(InitialValues) end),
     P ! {ok, Pid}.
+
+% Funzione per generare una stringa casuale di lunghezza N
+generate_random_string(N) ->
+    lists:map(fun(_) -> rand:uniform(26) + $a - 1 end, lists:seq(1, N)).
 
 % definizione del comportamento di un nodo kademlia generico
 node_behavior({Id, Storage, K_buckets, Timer}) ->
@@ -27,7 +33,14 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             node_behavior({Id, Storage, K_buckets, Timer});
         % modifica del tabella dei k_buckets
         {refresh, {Idx, Lista}} ->
-            node_behavior({Idx, Storage, Lista, Timer})
+            node_behavior({Idx, Storage, Lista, Timer});
+        {storage, Value} ->
+            Key = crypto:hash(sha256, Value),
+            NewStorage = [[Key, Value] | Storage],
+            node_behavior({Id, NewStorage, K_buckets, Timer});
+        % comportamento generico
+        _ ->
+            node_behavior({Id, Storage, K_buckets, Timer})
     end.
 
 % inizializzazione della rete di kademlia con la

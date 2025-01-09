@@ -53,7 +53,11 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                             From ! {find_result, not_found};
                         {_, _, ClosestPid, _} ->
                             % Inoltra la richiesta al nodo più vicino
-                            ClosestPid ! {find_node, TargetId, self()}
+                            io:format("Nodo più vicino trovato: ~p. Inoltro la richiesta...~n", [
+                                ClosestNode
+                            ]),
+                            % Invio della richiesta al nodo più vicino (bloccante per 30 secondi)
+                            send_find_node(ClosestPid, TargetId, From, 30)
                     end,
                     node_behavior({Id, Storage, K_buckets, Timer});
                 {_, FoundId, FoundPid, _} ->
@@ -68,6 +72,22 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
         % comportamento generico
         _ ->
             node_behavior({Id, Storage, K_buckets, Timer})
+    end.
+
+% Funzione invocata per inviare find_node in modo bloccante
+send_find_node(Pid, TargetId, From, Timeout) ->
+    % Invia il messaggio find_node al nodo destinazione
+    Pid ! {find_node, TargetId, self()},
+    % Imposta il timeout
+    receive
+        {find_result, FoundId, FoundPid} ->
+            io:format("Risultato trovato dopo ~p secondi: Nodo ID ~p, PID ~p~n", [
+                Timeout, FoundId, FoundPid
+            ]),
+            From ! {find_result, FoundId, FoundPid}
+    after Timeout * 1000 ->
+        io:format("Timeout dopo ~p secondi: Nessun risultato trovato~n", [Timeout]),
+        From ! {find_result, not_found}
     end.
 
 % inizializzazione della rete di kademlia con la

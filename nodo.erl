@@ -3,7 +3,7 @@
 -module(nodo).
 -include_lib("stdlib/include/qlc.hrl").
 
--export([start_system/1, new_erlang_node/1, node_behavior/1, print_all/0]).
+-export([start_system/1, new_erlang_node/1, node_behavior/1, print_all/0, all/0]).
 % gestione dei record per la tebella di bostrap
 -record(bootstrap_table, {id, pid, last_ping}).
 
@@ -34,10 +34,37 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
         % modifica del tabella dei k_buckets
         {refresh, {Idx, Lista}} ->
             node_behavior({Idx, Storage, Lista, Timer});
-        {stora, Value} ->
+        % aggiorna i suoi buckets
+        {newBuckets, Lista} ->
+            node_behavior({Id, Storage, Lista, Timer});
+        {store, Value} ->
             Key = crypto:hash(sha256, Value),
             NewStorage = [[Key, Value] | Storage],
             node_behavior({Id, NewStorage, K_buckets, Timer});
+        % messaggio per trovare un nodo
+        {find_node, TargetId, From} ->
+            case lists:keyfind(TargetId, 2, K_buckets) of
+                false ->
+                    % Nodo non trovato localmente, inoltra al nodo più vicino
+                    ClosestNode = find_closest(TargetId, K_buckets),
+                    case ClosestNode of
+                        undefined ->
+                            % Nessun nodo disponibile nei k-buckets
+                            From ! {find_result, not_found};
+                        {_, _, ClosestPid, _} ->
+                            % Inoltra la richiesta al nodo più vicino
+                            ClosestPid ! {find_node, TargetId, self()}
+                    end,
+                    node_behavior({Id, Storage, K_buckets, Timer});
+                {_, FoundId, FoundPid, _} ->
+                    % Nodo trovato, restituisci il risultato all'indietro
+                    From ! {find_result, FoundId, FoundPid},
+                    node_behavior({Id, Storage, K_buckets, Timer})
+            end;
+        % Quando il nodo corrente riceve il risultato della ricerca
+        {find_result, FoundId, FoundPid} ->
+            io:format("Nodo trovato: ID ~p, PID ~p~n", [FoundId, FoundPid]),
+            node_behavior({Id, Storage, K_buckets, Timer});
         % comportamento generico
         _ ->
             node_behavior({Id, Storage, K_buckets, Timer})
@@ -97,7 +124,33 @@ bootstrap_node_loop(Id) ->
                     io:format("[[--BOOSTRAP--]] Nodo aggiunto con successo: ~p~n", [NodeId]),
                     % assegnazione dell'Id e della K_buckets al nodo che entra
                     Buckets = get_4_buckets(NodeId),
-                    From ! {refresh, {NodeId, Buckets}};
+                    From ! {refresh, {NodeId, Buckets}},
+                    % serve il codice per aggiornare tutti i nodi vecchi
+                    % Recupera tutti i nodi dalla tabella mnesia, escluso il nodo appena aggiunto
+                    % solo se ci sono > 1 nodi
+                    AllNodes = all(),
+                    lists:foreach(
+                        fun({_, _, _}) ->
+                            case length(AllNodes) of
+                                1 ->
+                                    % Se la lista ha un solo elemento
+                                    io:format("Lista contiene un solo elemento~n", []);
+                                _ ->
+                                    % Per ogni nodo, ricalcola i 4 nodi più vicini
+                                    lists:foreach(
+                                        fun({Id_tmp, Pid, _}) ->
+                                            % Calcola i 4 nodi più vicini per questo nodo
+                                            Buckets_tmp = get_4_buckets(Id_tmp),
+
+                                            % Aggiorna i k-buckets di questo nodo
+                                            Pid ! {newBuckets, Buckets_tmp}
+                                        end,
+                                        AllNodes
+                                    )
+                            end
+                        end,
+                        AllNodes
+                    );
                 {_, Reason} ->
                     io:format("[[--BOOSTRAP--]] Errore durante l'aggiunta del nodo: ~p~n", [Reason])
             end,
@@ -126,6 +179,15 @@ print_all() ->
         end,
         Res
     ).
+
+% uguale a print_all() ma restituisce una lista
+all() ->
+    Print = fun(#bootstrap_table{id = Id, pid = Pid, last_ping = L}, Acc) ->
+        Acc ++ [{Id, Pid, L}]
+    end,
+    Tran = fun() -> mnesia:foldr(Print, [], bootstrap_table) end,
+    {_, Res} = mnesia:transaction(Tran),
+    Res.
 
 % funzione invocata per fornire ad un nodo, la sua lista k_buckets
 % Nota Arlind: rinominiamo la funzione in get_buckets.
@@ -157,3 +219,21 @@ get_4_buckets(NodeId) ->
     Top4 = lists:sublist(SortedRecords, 4),
     % Restituisci la lista
     Top4.
+
+% funzione per trovare il nodo più vicino
+find_closest(TargetId, K_buckets) ->
+    case K_buckets of
+        [] ->
+            % Nessun nodo nei k-buckets
+            undefined;
+        _ ->
+            % Ordina i nodi nei k-buckets per distanza XOR
+            Sorted = lists:sort(
+                fun({Distance1, _, _, _}, {Distance2, _, _, _}) ->
+                    Distance1 < Distance2
+                end,
+                [{TargetId bxor Id, Id, Pid, LastPing} || {_, Id, Pid, LastPing} <- K_buckets]
+            ),
+            % Restituisce il nodo più vicino
+            hd(Sorted)
+    end.

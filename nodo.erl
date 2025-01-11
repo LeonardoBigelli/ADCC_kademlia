@@ -3,6 +3,11 @@
 -module(nodo).
 -include_lib("stdlib/include/qlc.hrl").
 
+% Costanti
+
+% Massimo numero di hop per ricerca
+-define(MAX_HOPS, 10).
+
 -export([start_system/1, new_erlang_node/1, node_behavior/1, print_all/0, all/0]).
 % gestione dei record per la tebella di bostrap
 -record(bootstrap_table, {id, pid, last_ping}).
@@ -31,6 +36,29 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
         {pingTo, To} ->
             io:format("Ping ricevuto da: ~p", [To]),
             node_behavior({Id, Storage, K_buckets, Timer});
+        {ping, TargetId, FromTo} ->
+            % cerco se è gia' presente nei propri k_buckets
+            case lists:keyfind(TargetId, 2, K_buckets) of
+                % se non è presente:
+                false ->
+                    ClosestNode = find_closest(TargetId, K_buckets),
+                    case ClosestNode of
+                        undefined ->
+                            FromTo ! {ping_result, not_found};
+                        {_, _, ClosestPid, _} ->
+                            send_ping_node(ClosestPid, TargetId, FromTo, 30)
+                    end;
+                % se è presente:
+                _ ->
+                    FromTo ! {ping_result, trovato}
+            end,
+            node_behavior({Id, Storage, K_buckets, Timer});
+        {ping_result, trovato} ->
+            io:format("PONG", []),
+            node_behavior({Id, Storage, K_buckets, Timer});
+        {ping_result, not_found} ->
+            io:format("PANG", []),
+            node_behavior({Id, Storage, K_buckets, Timer});
         % modifica del tabella dei k_buckets
         {refresh, {Idx, Lista}} ->
             node_behavior({Idx, Storage, Lista, Timer});
@@ -54,7 +82,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                         {_, _, ClosestPid, _} ->
                             % Inoltra la richiesta al nodo più vicino
                             io:format("Nodo più vicino trovato: ~p. Inoltro la richiesta...~n", [
-                                ClosestNode
+                                ClosestPid
                             ]),
                             % Invio della richiesta al nodo più vicino (bloccante per 30 secondi)
                             send_find_node(ClosestPid, TargetId, From, 30)
@@ -81,13 +109,24 @@ send_find_node(Pid, TargetId, From, Timeout) ->
     % Imposta il timeout
     receive
         {find_result, FoundId, FoundPid} ->
-            io:format("Risultato trovato dopo ~p secondi: Nodo ID ~p, PID ~p~n", [
-                Timeout, FoundId, FoundPid
-            ]),
+            %  io:format("Risultato trovato dopo ~p secondi: Nodo ID ~p, PID ~p~n", [
+            %     Timeout, FoundId, FoundPid
+            % ]),
             From ! {find_result, FoundId, FoundPid}
     after Timeout * 1000 ->
         io:format("Timeout dopo ~p secondi: Nessun risultato trovato~n", [Timeout]),
         From ! {find_result, not_found}
+    end.
+
+% funzione per propagare il ping
+send_ping_node(Pid, TargetId, From, Timeout) ->
+    Pid ! {ping, TargetId, self()},
+    receive
+        {ping_result, Result} ->
+            From ! {ping_result, Result}
+    after Timeout * 1000 ->
+        io:format("Timeout dopo ~p secondi: Nessuna risposta dal nodo ~p~n", [Timeout, Pid]),
+        From ! {ping_result, not_found}
     end.
 
 % inizializzazione della rete di kademlia con la

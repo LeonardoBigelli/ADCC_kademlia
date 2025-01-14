@@ -15,8 +15,9 @@
 % creazione di un nuovo nodo
 new_erlang_node(P) ->
     % valore casuale (stringa)
-    Storage = generate_random_string(16),
-    Key = crypto:hash(sha256, Storage),
+    Storage = generate_random_string(5),
+    %Key = crypto:hash(sha256, Storage), NON SI USA SOLO PER IL TEST
+    Key = generate_random_string(3),
     InitialValues = {"idTMP", [[Key, Storage]], [], 0},
     Pid = spawn(fun() -> node_behavior(InitialValues) end),
     P ! {ok, Pid}.
@@ -97,6 +98,43 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
         {find_result, FoundId, FoundPid} ->
             io:format("Nodo trovato: ID ~p, PID ~p~n", [FoundId, FoundPid]),
             node_behavior({Id, Storage, K_buckets, Timer});
+        % ricerca di un valore nello storage data la key associata al valore
+        {find_value, Key, From} ->
+            % Controlla prima nel proprio storage
+            MyStorage = lists:foldl(
+                fun
+                    ([K, V], _) when K =:= Key -> [K, V];
+                    % Prosegui con il valore accumulato
+                    (_, Acc) -> Acc
+                end,
+                % Valore di default se nessun match
+                [],
+                Storage
+            ),
+            case MyStorage of
+                [Key, Value] ->
+                    % Trovato nel proprio storage, restituisci il valore
+                    From ! {value_found, Key, Value};
+                [] ->
+                    % Non trovato, inoltra al primo nodo nei k_buckets
+                    case K_buckets of
+                        [] ->
+                            % Nessun nodo disponibile, restituisci not_found
+                            From ! {value_not_found, Key};
+                        [{_, _, ClosestPid, _} | _] ->
+                            % Inoltra al nodo più vicino
+                            ClosestPid ! {find_value, Key, From}
+                    end
+            end,
+            node_behavior({Id, Storage, K_buckets, Timer});
+        % Quando riceve un valore trovato
+        {value_found, Key, Value} ->
+            io:format("Valore trovato: ~p -> ~p~n", [Key, Value]),
+            node_behavior({Id, Storage, K_buckets, Timer});
+        % Quando il valore non è stato trovato
+        {value_not_found, Key} ->
+            io:format("Valore non trovato per chiave: ~p~n", [Key]),
+            node_behavior({Id, Storage, K_buckets, Timer});
         % comportamento generico
         _ ->
             node_behavior({Id, Storage, K_buckets, Timer})
@@ -127,6 +165,19 @@ send_ping_node(Pid, TargetId, From, Timeout) ->
     after Timeout * 1000 ->
         io:format("Timeout dopo ~p secondi: Nessuna risposta dal nodo ~p~n", [Timeout, Pid]),
         From ! {ping_result, not_found}
+    end.
+
+% funzione per propagare il find_value
+send_find_value(Pid, Key, From, Timeout) ->
+    Pid ! {find_value, Key, self()},
+    receive
+        {value_found, Key, Value} ->
+            From ! {value_found, Key, Value};
+        {value_not_found, Key} ->
+            From ! {value_not_found, Key}
+    after Timeout * 1000 ->
+        io:format("Timeout dopo ~p secondi: Nessun valore trovato per Key=~p~n", [Timeout, Key]),
+        From ! {value_not_found, Key}
     end.
 
 % inizializzazione della rete di kademlia con la

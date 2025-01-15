@@ -12,3 +12,7 @@ Boot ! {ping, self()}.
 {_, Nodo\_1} = new\_erlang\_node(self()).
 #### Inserimento del nuovo nodo nella rete kademlia
 Boot ! {enter, Nodo\_1}. 
+
+
+# Problemi:
+-capire se è necessario il campo "Timer" in un nodo.

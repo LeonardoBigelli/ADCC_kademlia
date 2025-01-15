@@ -123,7 +123,8 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                             From ! {value_not_found, Key};
                         [{_, _, ClosestPid, _} | _] ->
                             % Inoltra al nodo più vicino
-                            ClosestPid ! {find_value, Key, From}
+                            % ClosestPid ! {find_value, Key, From} FUNZIONA MA NON è BLOCCANTE
+                            send_find_value(ClosestPid, Key, From, 30)
                     end
             end,
             node_behavior({Id, Storage, K_buckets, Timer});
@@ -140,7 +141,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             node_behavior({Id, Storage, K_buckets, Timer})
     end.
 
-% Funzione invocata per inviare find_node in modo bloccante
+% Funzione invocata per inviare find_node (bloccante)
 send_find_node(Pid, TargetId, From, Timeout) ->
     % Invia il messaggio find_node al nodo destinazione
     Pid ! {find_node, TargetId, self()},
@@ -156,7 +157,7 @@ send_find_node(Pid, TargetId, From, Timeout) ->
         From ! {find_result, not_found}
     end.
 
-% funzione per propagare il ping
+% funzione per propagare il ping (bloccante)
 send_ping_node(Pid, TargetId, From, Timeout) ->
     Pid ! {ping, TargetId, self()},
     receive
@@ -167,7 +168,7 @@ send_ping_node(Pid, TargetId, From, Timeout) ->
         From ! {ping_result, not_found}
     end.
 
-% funzione per propagare il find_value
+% funzione per propagare il find_value (bloccante)
 send_find_value(Pid, Key, From, Timeout) ->
     Pid ! {find_value, Key, self()},
     receive

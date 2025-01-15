@@ -37,9 +37,28 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
         {pingTo, To} ->
             io:format("Ping ricevuto da: ~p", [To]),
             node_behavior({Id, Storage, K_buckets, Timer});
+        % messaggio per cambiare il last_ping del nodo
+        {changeTimer, T, FromTo} ->
+            % il nodo che deve aggioranre il timer, vuol dire che ha ricevuto
+            % un ping, quindi deve aggiornare la sua K_buckets,
+            % modificando il campo last_ping in corrispondenza
+            % di FromTo
+            UpdatedBuckets = lists:map(
+                fun
+                    ({Distance, Id_tmp, Pid, _}) when Pid =:= FromTo ->
+                        % Aggiorna last_ping con T
+                        {Distance, Id_tmp, Pid, T};
+                    (Node) ->
+                        % Lascia inalterati gli altri nodi
+                        Node
+                end,
+                K_buckets
+            ),
+            node_behavior({Id, Storage, UpdatedBuckets, T});
         {ping, TargetId, FromTo} ->
             % cerco se è gia' presente nei propri k_buckets
-            case lists:keyfind(TargetId, 2, K_buckets) of
+            List = lists:keyfind(TargetId, 2, K_buckets),
+            case List of
                 % se non è presente:
                 false ->
                     ClosestNode = find_closest(TargetId, K_buckets),
@@ -50,7 +69,24 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                             send_ping_node(ClosestPid, TargetId, FromTo, 30)
                     end;
                 % se è presente:
-                _ ->
+                {_, _, Pid, _} ->
+                    % aggiorno il campo Timer del nodo che ha ricevuto il ping
+                    CurrentTime = erlang:system_time(second),
+                    Pid ! {changeTimer, CurrentTime, FromTo},
+                    % devo aggiornare anche il mio campo della K_bucket
+                    % perchè ho verificato che un nodo sia raggiungibile
+                    UpdatedBuckets = lists:map(
+                        fun
+                            ({Distance, Id_tmp, OtherPid, _}) when OtherPid =:= Pid ->
+                                % Aggiorna last_ping con T
+                                {Distance, Id_tmp, Pid, CurrentTime};
+                            (Node) ->
+                                % Lascia inalterati gli altri nodi
+                                Node
+                        end,
+                        K_buckets
+                    ),
+                    FromTo ! {newBuckets, UpdatedBuckets},
                     FromTo ! {ping_result, trovato}
             end,
             node_behavior({Id, Storage, K_buckets, Timer});

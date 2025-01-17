@@ -9,7 +9,7 @@ c(nodo).
 #### Verifica della corretta raggiungibilità del nodo di Boot
 Boot ! {ping, self()}.
 #### Creazione di un attore che rappresenta un nodo
-{_, Nodo\_1} = new\_erlang\_node(self()).
+{_, Nodo\_1} = new\_kademlia\_node(self()).
 #### Inserimento del nuovo nodo nella rete kademlia
 Boot ! {enter, Nodo\_1}. 
 

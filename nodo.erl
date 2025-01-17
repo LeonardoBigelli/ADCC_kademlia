@@ -8,12 +8,12 @@
 % Massimo numero di hop per ricerca
 -define(MAX_HOPS, 10).
 
--export([start_system/1, new_erlang_node/1, node_behavior/1, print_all/0, all/0]).
+-export([start_system/1, new_kademlia_node/1, print_all/0, all/0]).
 % gestione dei record per la tebella di bostrap
 -record(bootstrap_table, {id, pid, last_ping}).
 
 % creazione di un nuovo nodo
-new_erlang_node(P) ->
+new_kademlia_node(P) ->
     % valore casuale (stringa)
     Storage = generate_random_string(5),
     %Key = crypto:hash(sha256, Storage), NON SI USA SOLO PER IL TEST
@@ -33,6 +33,19 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             io:format("Id: ~p - Storage: ~p - K_buckets: ~p - Timer: ~p. ", [
                 Id, Storage, K_buckets, Timer
             ]),
+            node_behavior({Id, Storage, K_buckets, Timer});
+        % messaggio per l'invio periodico dello Storage ai suoi nodi della k_buckets
+        {send_periodic} ->
+            % Invia un messaggio a tutti i nodi nei K_buckets
+            lists:foreach(
+                fun({_, _, Pid, _}) ->
+                    io:format("Inoltro dello Storage...", []),
+                    Pid ! {addToStore, Storage}
+                end,
+                K_buckets
+            ),
+            % Avvia il prossimo ciclo dopo 30 secondi
+            timer:send_after(30000, self(), {send_periodic}),
             node_behavior({Id, Storage, K_buckets, Timer});
         {pingTo, To} ->
             io:format("Ping ricevuto da: ~p", [To]),
@@ -105,6 +118,17 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
         {store, Value} ->
             Key = crypto:hash(sha256, Value),
             NewStorage = [[Key, Value] | Storage],
+            node_behavior({Id, NewStorage, K_buckets, Timer});
+        % messaggio per aggiungere elementi al mio store se non
+        % sono gia' presenti
+        {addToStore, MoreStore} ->
+            % Filtra gli elementi di MoreStore che non sono già presenti in Storage
+            FilteredStore = lists:filter(
+                fun(Element) -> not lists:member(Element, Storage) end,
+                MoreStore
+            ),
+            % Aggiungi solo gli elementi filtrati a Storage
+            NewStorage = FilteredStore ++ Storage,
             node_behavior({Id, NewStorage, K_buckets, Timer});
         % messaggio per trovare un nodo
         {find_node, TargetId, From} ->
@@ -301,6 +325,9 @@ bootstrap_node_loop(Id) ->
                 {_, Reason} ->
                     io:format("[[--BOOSTRAP--]] Errore durante l'aggiunta del nodo: ~p~n", [Reason])
             end,
+            % avvio del sistema per inviare periodicamente i valori
+            % dello Storage del nodo ai suoi k_buckets
+            From ! {send_periodic},
             bootstrap_node_loop(Id);
         % stampa di tutta la sua tabella di mnesia
         {print} ->

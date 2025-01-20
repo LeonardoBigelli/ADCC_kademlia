@@ -3,11 +3,7 @@
 -module(nodo).
 -include_lib("stdlib/include/qlc.hrl").
 
-% Costanti
-
-% Massimo numero di hop per ricerca
--define(MAX_HOPS, 10).
-
+% interfaccie da esportare
 -export([start_system/1, new_kademlia_node/1, print_all/0, all/0]).
 % gestione dei record per la tebella di bostrap
 -record(bootstrap_table, {id, pid, last_ping}).
@@ -18,8 +14,13 @@ new_kademlia_node(P) ->
     Storage = generate_random_string(5),
     %Key = crypto:hash(sha256, Storage), NON SI USA SOLO PER IL TEST
     Key = generate_random_string(3),
+    % inizializzazione temporanea dei valori di un nodo
     InitialValues = {"idTMP", [[Key, Storage]], [], 0},
+    % effettuo la spawn del nodo vero e proprio con i parametri
+    % temporanei iniziali
     Pid = spawn(fun() -> node_behavior(InitialValues) end),
+    % restituisco il Pid del nodo di cui ho effettuato la spawn
+    % al nodo invocante (i.e. shell)
     P ! {ok, Pid}.
 
 % Funzione per generare una stringa casuale di lunghezza N
@@ -27,8 +28,14 @@ generate_random_string(N) ->
     lists:map(fun(_) -> rand:uniform(26) + $a - 1 end, lists:seq(1, N)).
 
 % definizione del comportamento di un nodo kademlia generico
+% definizione dei parametri:
+% -Id: identificativo univoco rispetto alla rete kademlia;
+% -Storage: lista di [Key, Value];
+% -K_buckets: i primi K nodi della rete vicini;
+% Timer: ultima volta che è stato contattato (FORSE DA ELIMINARE)
 node_behavior({Id, Storage, K_buckets, Timer}) ->
     receive
+        % messaggio per visualizzare lo stato del nodo corrente
         {getInfo} ->
             io:format("Id: ~p - Storage: ~p - K_buckets: ~p - Timer: ~p. ", [
                 Id, Storage, K_buckets, Timer
@@ -284,6 +291,7 @@ start_system(P) ->
 %    end),
 %    P ! {ok, Pid}.
 
+% utilizzato per impostare il 'trap_exit' a true.
 init_bootstrap(Id, Role) ->
     erlang:process_flag(trap_exit, true),
     bootstrap_node_loop(Id, Role).

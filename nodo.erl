@@ -54,6 +54,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             % Avvia il prossimo ciclo dopo 30 secondi
             timer:send_after(30000, self(), {send_periodic}),
             node_behavior({Id, Storage, K_buckets, Timer});
+        % messaggio per  ricevere un ping, solo io:format() su shell
         {pingTo, To} ->
             io:format("Ping ricevuto da: ~p", [To]),
             node_behavior({Id, Storage, K_buckets, Timer});
@@ -75,11 +76,13 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                 K_buckets
             ),
             node_behavior({Id, Storage, UpdatedBuckets, T});
+        % messaggio per effettuare un ping tramite l'identificativo della
+        % rete kademlia
         {ping, TargetId, FromTo} ->
             % cerco se è gia' presente nei propri k_buckets
             List = lists:keyfind(TargetId, 2, K_buckets),
             case List of
-                % se non è presente:
+                % se non è presente, contatto il nodo più vicino:
                 false ->
                     ClosestNode = find_closest(TargetId, K_buckets),
                     case ClosestNode of
@@ -88,7 +91,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                         {_, _, ClosestPid, _} ->
                             send_ping_node(ClosestPid, TargetId, FromTo, 30)
                     end;
-                % se è presente:
+                % se è presente, contatto il nodo direttamente:
                 {_, _, Pid, _} ->
                     % aggiorno il campo Timer del nodo che ha ricevuto il ping
                     CurrentTime = erlang:system_time(second),
@@ -110,16 +113,20 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                     FromTo ! {ping_result, trovato}
             end,
             node_behavior({Id, Storage, K_buckets, Timer});
+        % messaggio per segnalare che il ping è avvenuto con successo
         {ping_result, trovato} ->
             io:format("PONG", []),
             node_behavior({Id, Storage, K_buckets, Timer});
+        % messaggio per segnalare che il ping è fallito
         {ping_result, not_found} ->
             io:format("PANG", []),
             node_behavior({Id, Storage, K_buckets, Timer});
-        % modifica del tabella dei k_buckets
+        % modifica del tabella dei k_buckets e dell'id.
+        % il messaggio viene ricevuto quando il nodo entra con successo
+        % nella rete di kademlia
         {refresh, {Idx, Lista}} ->
             node_behavior({Idx, Storage, Lista, Timer});
-        % aggiorna i suoi buckets
+        % aggiorna i buckets del nodo corrente
         {newBuckets, Lista} ->
             node_behavior({Id, Storage, Lista, Timer});
         {store, Value} ->
@@ -137,7 +144,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             % Aggiungi solo gli elementi filtrati a Storage
             NewStorage = FilteredStore ++ Storage,
             node_behavior({Id, NewStorage, K_buckets, Timer});
-        % messaggio per trovare un nodo
+        % messaggio per trovare un nodo, dato il suo Id
         {find_node, TargetId, From} ->
             case lists:keyfind(TargetId, 2, K_buckets) of
                 false ->

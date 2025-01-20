@@ -291,9 +291,11 @@ bootstrap_node_loop(Id, Role) ->
         {ping, From} ->
             io:format("[[--BOOSTRAP--]] --> Ping ricevuto da: ~p~n .", [From]),
             bootstrap_node_loop(Id, Role);
-        % crea backup
+        % messaggio per creare il backup
         {createBackup, BackupId} ->
+            % effettuo la spawn per creare il backup
             BackupPid = spawn_link(fun() -> init_bootstrap(BackupId, backup) end),
+            % registro il backup
             register(
                 backup_bootstrap, BackupPid
             ),
@@ -304,15 +306,6 @@ bootstrap_node_loop(Id, Role) ->
             io:format("[[--BOOSTRAP--]] --> Richiesta di entrare nella rete da da: ~p~n .", [From]),
             % creazione id del nuovo nodo
             NodeId = rand:uniform(1 bsl 160 - 1),
-            % transazione per aggiungere un nodo alla tabella mnesia
-            %Tran = fun() ->
-            %   mnesia:write(#boostrap_table{
-            %      id = NodeId, pid = From, last_ping = 0
-            % })
-            %end,
-            % esecuzione della transazione, inserimento del nodo
-            % nella tabella mnesia del boostrap
-            %mnesia:transaction(Tran),
             % Transazione per aggiungere il nodo nella tabella Mnesia
             case
                 mnesia:transaction(fun() ->

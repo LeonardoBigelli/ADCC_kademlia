@@ -270,40 +270,19 @@ start_system(P) ->
     % generazione di un Id casuale per il 'backup'
     BackupNodeId = rand:uniform(1 bsl 160 - 1),
     Pid = spawn(fun() -> init_bootstrap(NodeId, primary) end),
-    %BackupPid = spawn_link(fun() ->
-    %   bootstrap_node_loop(BackupNodeId, backup)
-    % end),
-    % esplicitiamo per renderlo bi-direzionale
-    %link(Pid),
     % registrazione del Bootstrap 'backup'
     register(bootstrap, Pid),
-    % registrazione del Bootstrap 'principale'
-    %  register(bootstrap, spawn_link(fun() -> bootstrap_node_loop(BackupNodeId, backup) end)),
-
-    % collegamento bi-direzionale tra il processo principale e il processo di backup
-
-    % link dal backup al principale
-    % link(Pid),
-    % link dal principale al backup
-    % link(BackupPid),
-
-    %  Boot_sx = spawn(fun() -> bootstrap_node_loop(NodeId, none, none) end),
-    %  Boot_dx = spawn(fun() -> bootstrap_node_loop(NodeId, none, none) end),
+    % inoltro del messaggio per creare il nodo di backup
+    % del bootstrap, al bootstrap principale
     Pid ! {createBackup, BackupNodeId},
     P ! {ok}.
-%   Verifica se ciò può andare bene.
-%     % aggiunta del nodo bootstrap alla tabella mnesia
-%    mnesia:transaction(fun() ->
-%        mnesia:write(#bootstrap_table{id = NodeId, pid = Pid, last_ping = 0})
-%    end),
-%    P ! {ok, Pid}.
 
 % utilizzato per impostare il 'trap_exit' a true.
 init_bootstrap(Id, Role) ->
     erlang:process_flag(trap_exit, true),
     bootstrap_node_loop(Id, Role).
 
-% il nodo boostrapt e' considerato come una sorta di server
+% comportamento del nodo di bootstrap, principale e backup
 bootstrap_node_loop(Id, Role) ->
     % segnalo che è stato avviato con successo
     io:format("Nodo bootstrap pronto con ID: ~p~n", [Id]),

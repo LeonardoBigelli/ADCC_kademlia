@@ -251,10 +251,32 @@ start_system(P) ->
         {type, set},
         {disc_copies, [node()]}
     ]),
-    % generazione di un Id casuale
+    % generazione di un Id casuale per il 'principale'
     NodeId = rand:uniform(1 bsl 160 - 1),
-    Pid = spawn(fun() -> bootstrap_node_loop(NodeId) end),
-    P ! {ok, Pid}.
+    % generazione di un Id casuale per il 'backup'
+    BackupNodeId = rand:uniform(1 bsl 160 - 1),
+    Pid = spawn(fun() -> init_bootstrap(NodeId, primary) end),
+    %BackupPid = spawn_link(fun() ->
+    %   bootstrap_node_loop(BackupNodeId, backup)
+    % end),
+    % esplicitiamo per renderlo bi-direzionale
+    %link(Pid),
+    % registrazione del Bootstrap 'backup'
+    register(bootstrap, Pid),
+    % registrazione del Bootstrap 'principale'
+    %  register(bootstrap, spawn_link(fun() -> bootstrap_node_loop(BackupNodeId, backup) end)),
+
+    % collegamento bi-direzionale tra il processo principale e il processo di backup
+
+    % link dal backup al principale
+    % link(Pid),
+    % link dal principale al backup
+    % link(BackupPid),
+
+    %  Boot_sx = spawn(fun() -> bootstrap_node_loop(NodeId, none, none) end),
+    %  Boot_dx = spawn(fun() -> bootstrap_node_loop(NodeId, none, none) end),
+    Pid ! {createBackup, BackupNodeId},
+    P ! {ok}.
 %   Verifica se ciò può andare bene.
 %     % aggiunta del nodo bootstrap alla tabella mnesia
 %    mnesia:transaction(fun() ->
@@ -262,15 +284,27 @@ start_system(P) ->
 %    end),
 %    P ! {ok, Pid}.
 
+init_bootstrap(Id, Role) ->
+    erlang:process_flag(trap_exit, true),
+    bootstrap_node_loop(Id, Role).
+
 % il nodo boostrapt e' considerato come una sorta di server
-bootstrap_node_loop(Id) ->
+bootstrap_node_loop(Id, Role) ->
     % segnalo che è stato avviato con successo
     io:format("Nodo bootstrap pronto con ID: ~p~n", [Id]),
     receive
         % messaggio che definisce il ping al boostrap
         {ping, From} ->
             io:format("[[--BOOSTRAP--]] --> Ping ricevuto da: ~p~n .", [From]),
-            bootstrap_node_loop(Id);
+            bootstrap_node_loop(Id, Role);
+        % crea backup
+        {createBackup, BackupId} ->
+            BackupPid = spawn_link(fun() -> init_bootstrap(BackupId, backup) end),
+            register(
+                backup_bootstrap, BackupPid
+            ),
+            io:format("Nodo backup del bootstrap creato.", []),
+            bootstrap_node_loop(Id, Role);
         % richiesta di un nodo di entrare nella rete
         {enter, From} ->
             io:format("[[--BOOSTRAP--]] --> Richiesta di entrare nella rete da da: ~p~n .", [From]),
@@ -328,15 +362,47 @@ bootstrap_node_loop(Id) ->
             % avvio del sistema per inviare periodicamente i valori
             % dello Storage del nodo ai suoi k_buckets
             From ! {send_periodic},
-            bootstrap_node_loop(Id);
+            bootstrap_node_loop(Id, Role);
         % stampa di tutta la sua tabella di mnesia
         {print} ->
             print_all(),
-            bootstrap_node_loop(Id);
+            bootstrap_node_loop(Id, Role);
+        % messaggio per far morirre il nodo
+        {crash} ->
+            exit(errore);
+        % Fallimento di uno dei nodi (NON FUNZIONA, STESSO PRINCIPIO DI QUANDO LI LINKO LA PRIMA VOLTA...)
+        {'EXIT', _, _Reason} ->
+            io:format("ricevuto exit....", []),
+            case Role of
+                primary ->
+                    % il backup è morto
+                    io:format(
+                        "Il nodo di backup è morto. Creazione di un nuovo nodo di backup.~n"
+                    ),
+                    NewBackupPid = spawn_link(fun() ->
+                        bootstrap_node_loop(rand:uniform(1 bsl 160 - 1), backup)
+                    end),
+                    register(backup_bootstrap, NewBackupPid),
+                    bootstrap_node_loop(Id, primary);
+                backup ->
+                    % il principale è morto
+                    io:format(
+                        "Il nodo principale è morto. Divento il nuovo principale e creo un nuovo backup.~n"
+                    ),
+                    unregister(backup_bootstrap),
+                    register(primary_bootstrap, self()),
+
+                    % Creazione del nuovo nodo di backup
+                    NewBackupPid = spawn_link(fun() ->
+                        bootstrap_node_loop(rand:uniform(1 bsl 160 - 1), backup)
+                    end),
+                    register(backup_bootstrap, NewBackupPid),
+                    bootstrap_node_loop(Id, primary)
+            end;
         % messaggio generico
         _ ->
             io:format("[[--BOOSTRAP--]] --> Messaggio sconosciuto."),
-            bootstrap_node_loop(Id)
+            bootstrap_node_loop(Id, Role)
     end.
 
 % funzione invocata per visualizzare il contenuto dello schema di mnesia,

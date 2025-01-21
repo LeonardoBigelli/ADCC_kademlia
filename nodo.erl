@@ -46,7 +46,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             % Invia un messaggio a tutti i nodi nei K_buckets
             lists:foreach(
                 fun({_, _, Pid, _}) ->
-                    io:format("Inoltro dello Storage...", []),
+                    %io:format("Inoltro dello Storage...", []),
                     Pid ! {addToStore, Storage}
                 end,
                 K_buckets
@@ -146,6 +146,8 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             node_behavior({Id, NewStorage, K_buckets, Timer});
         % messaggio per trovare un nodo, dato il suo Id
         {find_node, TargetId, From} ->
+            StartTime = erlang:system_time(second),
+            %% check 2
             case lists:keyfind(TargetId, 2, K_buckets) of
                 false ->
                     % Nodo non trovato localmente, inoltra al nodo più vicino
@@ -153,6 +155,8 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                     case ClosestNode of
                         undefined ->
                             % Nessun nodo disponibile nei k-buckets
+
+                            % not matched
                             From ! {find_result, not_found};
                         {_, _, ClosestPid, _} ->
                             % Inoltra la richiesta al nodo più vicino
@@ -165,6 +169,8 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                     node_behavior({Id, Storage, K_buckets, Timer});
                 {_, FoundId, FoundPid, _} ->
                     % Nodo trovato, restituisci il risultato all'indietro
+                    EndTime = erlang:system_time(second),
+                    io:format("Tempo impiegato per trovare un nodo: ~ps\n", [EndTime - StartTime]),
                     From ! {find_result, FoundId, FoundPid},
                     node_behavior({Id, Storage, K_buckets, Timer})
             end;
@@ -172,7 +178,10 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
         {find_result, FoundId, FoundPid} ->
             io:format("Nodo trovato: ID ~p, PID ~p~n", [FoundId, FoundPid]),
             node_behavior({Id, Storage, K_buckets, Timer});
-        % ricerca di un valore nello storage data la key associata al valore
+        {find_result, not_found} ->
+            io:format("Nodo non trovato\n", []),
+            % ricerca di un valore nello storage data la key associata al valore
+            node_behavior({Id, Storage, K_buckets, Timer});
         {find_value, Key, From} ->
             % Controlla prima nel proprio storage
             MyStorage = lists:foldl(
@@ -225,7 +234,10 @@ send_find_node(Pid, TargetId, From, Timeout) ->
             %  io:format("Risultato trovato dopo ~p secondi: Nodo ID ~p, PID ~p~n", [
             %     Timeout, FoundId, FoundPid
             % ]),
-            From ! {find_result, FoundId, FoundPid}
+            From ! {find_result, FoundId, FoundPid};
+        % se non lo trova
+        {find_result, not_found} ->
+            From ! {find_result, not_found}
     after Timeout * 1000 ->
         io:format("Timeout dopo ~p secondi: Nessun risultato trovato~n", [Timeout]),
         From ! {find_result, not_found}
@@ -303,6 +315,7 @@ bootstrap_node_loop(Id, Role) ->
             bootstrap_node_loop(Id, Role);
         % richiesta di un nodo di entrare nella rete
         {enter, From} ->
+            Time = erlang:system_time(second),
             io:format("[[--BOOSTRAP--]] --> Richiesta di entrare nella rete da da: ~p~n .", [From]),
             % creazione id del nuovo nodo
             NodeId = rand:uniform(1 bsl 160 - 1),
@@ -342,7 +355,9 @@ bootstrap_node_loop(Id, Role) ->
                             end
                         end,
                         AllNodes
-                    );
+                    ),
+                    CurrentTime = erlang:system_time(second),
+                    io:format("Tempo necessario per l'aggiunta: ~ps\n", [CurrentTime - Time]);
                 {_, Reason} ->
                     io:format("[[--BOOSTRAP--]] Errore durante l'aggiunta del nodo: ~p~n", [Reason])
             end,
@@ -377,7 +392,7 @@ bootstrap_node_loop(Id, Role) ->
                         "Il nodo principale è morto. Divento il nuovo principale e creo un nuovo backup.~n"
                     ),
                     unregister(backup_bootstrap),
-                    register(primary_bootstrap, self()),
+                    register(bootstrap, self()),
 
                     % Creazione del nuovo nodo di backup
                     NewBackupPid = spawn_link(fun() ->
@@ -442,10 +457,28 @@ get_4_buckets(NodeId) ->
     {atomic, AllRecords} = mnesia:transaction(Tran),
     % Ordina per distanza XOR
     SortedRecords = lists:sort(fun({D1, _, _, _}, {D2, _, _, _}) -> D1 < D2 end, AllRecords),
-    % Prendi i primi 4
-    Top4 = lists:sublist(SortedRecords, 4),
-    % Restituisci la lista
-    Top4.
+
+    case SortedRecords of
+        [] ->
+            % Nessun nodo nella rete, restituisce una lista vuota
+            [];
+        [_] ->
+            % Un solo nodo nella rete, restituisci quel nodo
+            SortedRecords;
+        _ ->
+            % Almeno due nodi nella rete
+            ClosestTwo = lists:sublist(SortedRecords, 2),
+            TotalNodes = length(SortedRecords),
+            MiddleNodeIndex =
+                case TotalNodes > 2 of
+                    true -> round(TotalNodes / 2);
+                    false -> 1
+                end,
+            MiddleNode = lists:nth(MiddleNodeIndex, SortedRecords),
+            FarthestNode = lists:last(SortedRecords),
+            UniqueNodes = lists:usort(ClosestTwo ++ [MiddleNode, FarthestNode]),
+            lists:sublist(UniqueNodes, 4)
+    end.
 
 % funzione per trovare il nodo più vicino
 find_closest(TargetId, K_buckets) ->

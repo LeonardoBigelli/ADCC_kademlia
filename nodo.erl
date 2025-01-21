@@ -341,16 +341,17 @@ bootstrap_node_loop(Id, Role) ->
                                     % Se la lista ha un solo elemento
                                     io:format("Lista contiene un solo elemento~n", []);
                                 _ ->
-                                    % Per ogni nodo, ricalcola i 4 nodi più vicini
+                                    % Per ogni nodo vicino a quello appena inserito,
+                                    % ricalcola i 4 nodi più vicini
                                     lists:foreach(
-                                        fun({Id_tmp, Pid, _}) ->
+                                        fun({_, Id_tmp, Pid, _}) ->
                                             % Calcola i 4 nodi più vicini per questo nodo
                                             Buckets_tmp = get_4_buckets(Id_tmp),
 
                                             % Aggiorna i k-buckets di questo nodo
                                             Pid ! {newBuckets, Buckets_tmp}
                                         end,
-                                        AllNodes
+                                        Buckets
                                     )
                             end
                         end,
@@ -477,7 +478,8 @@ get_4_buckets(NodeId) ->
             MiddleNode = lists:nth(MiddleNodeIndex, SortedRecords),
             FarthestNode = lists:last(SortedRecords),
             UniqueNodes = lists:usort(ClosestTwo ++ [MiddleNode, FarthestNode]),
-            lists:sublist(UniqueNodes, 4)
+            lists:sublist(UniqueNodes, 4),
+            io:format("K_buckets: ~p\n", [lists:sublist(UniqueNodes, 4)])
     end.
 
 % funzione per trovare il nodo più vicino

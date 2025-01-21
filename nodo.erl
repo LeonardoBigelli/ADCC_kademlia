@@ -478,8 +478,7 @@ get_4_buckets(NodeId) ->
             MiddleNode = lists:nth(MiddleNodeIndex, SortedRecords),
             FarthestNode = lists:last(SortedRecords),
             UniqueNodes = lists:usort(ClosestTwo ++ [MiddleNode, FarthestNode]),
-            lists:sublist(UniqueNodes, 4),
-            io:format("K_buckets: ~p\n", [lists:sublist(UniqueNodes, 4)])
+            lists:sublist(UniqueNodes, 4)
     end.
 
 % funzione per trovare il nodo più vicino

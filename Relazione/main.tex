@@ -1,0 +1,213 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage[italian]{babel}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{color}
+\usepackage[pdftex]{graphicx}
+\usepackage[svgnames]{xcolor}
+\usepackage{array}
+\usepackage{parskip}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[many]{tcolorbox}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{appendix}
+\usepackage{fancyhdr}
+\usepackage{titling}
+\usepackage{csquotes}
+\usepackage{authblk}
+
+\usepackage{biblatex} %Imports biblatex package
+\addbibresource{Bibliography.bib}
+\title{\color{FireBrick}\bf{Implementazione in Earlang del protocollo Kademlia}}
+\author[1]{\color{FireBrick}\bf{Arlind Pecmarkaj}}
+\author[2]{\color{FireBrick}\bf{Leonardo Bigelli}}
+
+\affil[1]{a.pecmarkaj@campus.uniurb.it}
+\affil[2]{l.bigelli2@campus.uniurb.it}
+
+\date{}
+
+\begin{document}
+\fancypagestyle{firstpage}
+{
+    \fancyhead[L]{\footnotesize{\bf{Universit\`a degli Studi di Urbino Carlo Bo}}}
+	\fancyhead[R]{\footnotesize{\bf{CdL Magistrale Informatica e Innovazione Digitale}}}
+}
+\thispagestyle{firstpage}
+
+\pagestyle{fancy}
+
+\fancyhead{} % clear all header fields
+\fancyhead[L]{\color{Black}{\footnotesize{\thetitle}}}
+\fancyfoot{} % clear all footer fields
+\fancyfoot[R]{\footnotesize{\bf{\thepage}}}
+\fancyfoot[L]{\footnotesize{\bf{Progetto del corso di Applicazioni Distribuite e Cloud Computing}}}
+
+
+
+\twocolumn
+%------------------------------------------                                       
+%                      Title
+%------------------------------------------
+[{
+\maketitle
+\thispagestyle{firstpage}
+\title{\color{Black}\bf{Implementazione in Earlang del protocollo Kademlia}}
+%------------------------------------------                                                           
+%                   Abstract
+%------------------------------------------
+\normalsize
+\begin{tcolorbox}[  colback = WhiteSmoke,
+                    ,
+                    width=\linewidth,
+                    arc=1mm, auto outer arc,
+                ]
+\section*{Riassunto}
+In questa relazione verrà spiegata l'implementazione in Earlang del protocollo Kademlia, illustrando le principali scelte tecniche attuate.
+\end{tcolorbox}
+\vspace{1.5ex}
+}]
+
+
+%------------------------------------------
+%                   Main Matter
+%------------------------------------------
+
+\section{Introduzione}
+La crescente diffusione di sistemi distribuiti ha reso necessario lo sviluppo di protocolli in grado di garantire un'efficiente gestione e ricerca dei dati in reti dinamiche. Tra questi, Kademlia rappresenta una soluzione particolarmente efficace grazie alla sua architettura basata su una Distributed Hash Table (DHT). Le sue caratteristiche di scalabilità, robustezza e semplicità lo rendono ideale per applicazioni come reti peer-to-peer, condivisione file e sistemi di comunicazione distribuita.
+
+Il presente progetto si propone di implementare il protocollo Kademlia utilizzando Erlang, un linguaggio noto per il supporto nativo alla concorrenza, la tolleranza ai guasti e il modello ad attori. Lo sviluppo mira a esplorare in modo pratico il funzionamento del protocollo, analizzandone l'efficacia e le prestazioni in un ambiente distribuito simulato. Questa implementazione costituisce non solo un'opportunità per approfondire la comprensione teorica del protocollo, ma anche per indagare le implicazioni pratiche legate alla sua applicazione in contesti reali.
+
+\section{Kademlia}
+Kademlia è un protocollo di Distributed Hash Table (DHT) progettato per fornire un meccanismo efficiente e scalabile per la memorizzazione e la ricerca di dati in un sistema distribuito. Il protocollo si basa su identificatori univoci a 160 bit assegnati sia ai nodi della rete sia ai dati \cite{kad}. La distanza tra due identificatori è calcolata utilizzando l'operazione XOR, che permette di definire una metrica logica utile per il routing.
+
+Il protocollo vrede l'implementazione di quattro messaggi:
+\begin{enumerate}
+    \item {\bf \texttt{PING}}: verifica la raggiungibilità di un nodo. È utilizzato per mantenere aggiornata la tabella di routing, eliminando i nodi non più attivi. Quando un nodo invia un messaggio PING, il destinatario deve rispondere con un messaggio di conferma, garantendo così la sua presenza nella rete;
+    \item {\bf \texttt{STORE}}: permette di salvare un valore associato a una chiave specifica in un nodo della rete. Il protocollo prevede che la chiave sia generata in modo deterministico, tipicamente attraverso una funzione di hash applicata al contenuto del dato, garantendo una distribuzione uniforme delle chiavi tra i nodi;
+    \item {\bf \texttt{FIND\_NODE}}: consente di individuare i nodi della rete che si trovano più vicini, in termini di distanza XOR, a un dato identificatore. L'operazione è alla base del meccanismo di routing iterativo di Kademlia e si basa su richieste successive ai nodi più vicini noti al richiedente, fino a individuare i destinatari desiderati.
+    \item {\bf \texttt{FIND\_VALUE}}: utilizzato per recuperare un valore specifico associato a una chiave. Se il nodo interrogato possiede il valore richiesto, lo restituisce direttamente; altrimenti, fornisce un elenco di nodi più vicini alla chiave in questione, proseguendo così il processo di ricerca. \'E simile a \texttt{FIND\_NODE};
+\end{enumerate}
+Le operazioni sopra descritte sono supportate da una tabella di routing strutturata in k-buckets. Ogni bucket raccoglie informazioni su nodi che si trovano a una determinata distanza logica dal nodo locale, consentendo un aggiornamento incrementale ed efficiente della rete. Questo approccio ottimizza il bilanciamento del carico e la robustezza, garantendo resilienza anche in presenza di variazioni frequenti nella topologia della rete.
+\section{Implementazione}
+\subsection{Rappresentazione dei Nodi,\\ K-Buckets e Storage}
+Si è deciso di rappresentare un nodo come una tupla formata da:
+\begin{itemize}
+    \item \texttt{\{ID, Storage, K\_Buckets, Timer\}}, dove:
+    \begin{itemize}
+        \item \textbf{ID}: Un identificatore univoco del nodo, rappresentato come stringa casuale simulando un hash crittografico (es. SHA256).
+        \item \textbf{Storage}: Una lista di coppie chiave-valore (la coppia è rappresentata da una lista) \texttt{[Key, Value]}, utilizzata per memorizzare i dati localmente.
+        \item \textbf{K\_Buckets}: Una lista strutturata che rappresenta la vista del nodo sui nodi vicini. Ogni K-bucket è rappresentato come una tupla \texttt{\{Distance, Nodi\}} dove:
+        \begin{itemize}
+            \item \textbf{Distance}: La distanza XOR tra l'ID del nodo e gli altri nodi presenti nel bucket.
+            \item \textbf{Nodi}: Una lista di nodi (tuple \texttt{\{ID, PID\}}) che si trovano entro una certa distanza.
+        \end{itemize}
+        \item \textbf{Timer}: Un valore che rappresenta il timestamp dell'ultima attività del nodo.
+    \end{itemize}
+\end{itemize}
+
+I K-buckets vengono  e vengono aggiornati dinamicamente in base alla distanza XOR. Ogni bucket mantiene una lista ordinata di nodi vicini, in modo da ottimizzare il routing nella rete.
+
+Ogni nodo viene avviato come un processo indipendente tramite la funzione \texttt{spawn}, che ne consente l'esecuzione concorrente e la comunicazione asincrona.
+
+Per i K-Buckets si è deciso di implementare:
+\begin{itemize}
+    \item Aggiornamento Dinamico:
+    \begin{itemize}
+        \item Ogni nodo aggiorna la propria lista\\ K-buckets in base all'attività di rete (es. ricezione di ping).
+        \item I bucket vengono ricalcolati ogni volta che un nuovo nodo entra nella rete \\ (\texttt{get\_4\_buckets/1}).
+    \end{itemize}
+    \item Meccanismo di Timeout:
+    \begin{itemize}
+        \item Ogni nodo memorizza un timer per ogni peer nella sua lista, eliminando i nodi inattivi dopo un certo periodo.
+    \end{itemize}
+\end{itemize}
+
+\subsection{Comportamento dei Nodi}
+Il comportamento di un nodo è definito dalla funzione \texttt{node\_behavior/1}, che implementa un ciclo di ricezione (\texttt{receive}) per gestire i messaggi. I principali messaggi gestiti includono:
+\begin{itemize}
+    \item \textbf{\texttt{ping}}:
+    \begin{itemize}
+        \item Se il nodo target è presente nei K-buckets, viene contattato direttamente.
+        \item Se il target non è nei K-buckets, il ping viene inoltrato al nodo più vicino utilizzando la funzione \texttt{find\_closest/2}.
+    \end{itemize}
+    \item \textbf{\texttt{store}}:
+    \begin{itemize}
+        \item Inserisce una coppia chiave-valore nello storage locale del nodo.
+        \item Se il valore è già presente, non viene duplicato.
+    \end{itemize}
+    \item \textbf{\texttt{find\_node}}:
+    \begin{itemize}
+        \item Cerca un nodo specifico nei K-buckets locali.
+        \item Se il nodo non è trovato, la richiesta viene inoltrata al nodo più vicino.
+    \end{itemize}
+    \item \textbf{\texttt{find\_value}}:
+    \begin{itemize}
+        \item Prima cerca il valore nello storage locale.
+        \item Se non trovato, inoltra la richiesta ai nodi più vicini nei K-buckets.
+    \end{itemize}
+    \item \textbf{\texttt{send\_periodic}}:
+    \begin{itemize}
+        \item Implementa la sincronizzazione periodica.
+        \item Ogni 30 secondi, i dati dello storage locale vengono inviati ai nodi presenti nei K-buckets.
+    \end{itemize}
+\end{itemize}
+
+Questa implementazione è altamente modulare e consente l'estensione per ulteriori funzionalità senza modificare il comportamento esistente.
+
+\subsection{Inizializzazione della rete e gestione della persistenza}
+La rete è inizializzata tramite la funzione \\ \texttt{start\_system/1}, che crea un nodo bootstrap con le seguenti caratteristiche:
+\begin{itemize}
+    \item \textbf{Nodo Principale (\texttt{primary})}:
+    \begin{itemize}
+        \item Memorizza i dettagli di tutti i nodi partecipanti nella tabella distribuita \textbf{Mnesia}.
+        \item Gestisce l'ingresso di nuovi nodi con un processo transazionale sicuro.
+        \item Sincronizza i K-buckets dei nodi esistenti ogni volta che un nuovo nodo entra nella rete.
+    \end{itemize}
+    \item \textbf{Nodo di Backup (\texttt{backup})}:
+    \begin{itemize}
+        \item Funziona come failover per il nodo principale.
+        \item È creato dinamicamente e registrato tramite \texttt{register/2} per garantire una gestione resiliente in caso di crash del nodo principale.
+    \end{itemize}
+\end{itemize}
+
+L'algoritmo utilizza il meccanismo di failover di Erlang basato su \texttt{trap\_exit}, per passare il controllo al backup in caso di guasto:
+\begin{itemize}
+    \item Il nodo principale e il nodo di backup si monitorano a vicenda tramite \texttt{trap\_exit}.
+    \item In caso di crash di uno dei due nodi bootstrap:
+    \begin{itemize}
+        \item Il nodo rimanente assume il ruolo principale.
+        \item Un nuovo nodo di backup viene creato dinamicamente per ripristinare il failover.
+    \end{itemize}
+\end{itemize}
+
+Il sistema utilizza \textbf{Mnesia}, un database distribuito nativo di Erlang, per memorizzare informazioni sui nodi nella rete. In particolare:
+\begin{itemize}
+    \item La tabella \texttt{bootstrap\_table} archivia ID, PID e l'ultimo timestamp di ping per ogni nodo.
+    \item Le operazioni su questa tabella sono transazionali, garantendo consistenza in presenza di errori.
+\end{itemize}
+
+\subsection{Considerazioni}
+\begin{itemize}
+    \item \textbf{Concorrente e Scalabile}:
+    \begin{itemize}
+        \item Ogni nodo è un processo indipendente, sfruttando il modello ad attori per una gestione efficiente della concorrenza.
+        \item L'approccio a bucket consente la scalabilità per reti di grandi dimensioni.
+    \end{itemize}
+    \item \textbf{Robustezza}:
+    \begin{itemize}
+        \item Il sistema tollera il fallimento dei nodi, garantendo che la rete rimanga operativa anche in condizioni avverse.
+    \end{itemize}
+    \item \textbf{Estensibilità}:
+    \begin{itemize}
+        \item La modularità del codice consente di aggiungere nuove funzionalità senza interrompere il comportamento esistente.
+    \end{itemize}
+\end{itemize}
+
+\section{Metriche}
+
+\printbibliography
+\end{document}

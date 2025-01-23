@@ -172,28 +172,33 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             %% check 2
             case lists:keyfind(TargetId, 2, K_buckets) of
                 false ->
+                    % CHECK: se ClosestPid == From -> find_closest(TargetId, (K_buckets - closestPid)
+                    Bucktes_noLoop = lists:filter(
+                        fun({_, _, X, _}) -> not lists:member(X, From) end, K_buckets
+                    ),
                     % Nodo non trovato localmente, inoltra al nodo più vicino
-                    ClosestNode = find_closest(TargetId, K_buckets),
+                    ClosestNode = find_closest(TargetId, Bucktes_noLoop),
                     case ClosestNode of
                         undefined ->
                             % Nessun nodo disponibile nei k-buckets
-
-                            % not matched
                             From ! {find_result, not_found};
                         {_, _, ClosestPid, _} ->
-                            % Inoltra la richiesta al nodo più vicino
-                            io:format("Nodo più vicino trovato: ~p. Inoltro la richiesta...~n", [
-                                ClosestPid
-                            ]),
-                            % Invio della richiesta al nodo più vicino (bloccante per 30 secondi)
-                            send_find_node(ClosestPid, TargetId, From, 30)
+                            % CHECK: se ClosestPid == From -> find_closest(TargetId, (K_buckets - closestPid)
+                            io:format(
+                                "Nodo più vicino trovato: ~p. Inoltro la richiesta...~n", [
+                                    ClosestPid
+                                ]
+                            ),
+                            % Invio della richiesta al nodo più vicino (bloccante per 5 secondi)
+                            send_find_node(ClosestPid, TargetId, From, 5)
                     end,
                     node_behavior({Id, Storage, K_buckets, Timer});
                 {_, FoundId, FoundPid, _} ->
+                    [H | _] = From,
                     % Nodo trovato, restituisci il risultato all'indietro
                     EndTime = erlang:system_time(second),
                     io:format("Tempo impiegato per trovare un nodo: ~ps\n", [EndTime - StartTime]),
-                    From ! {find_result, FoundId, FoundPid},
+                    H ! {find_result, FoundId, FoundPid},
                     node_behavior({Id, Storage, K_buckets, Timer})
             end;
         {find_result, not_found} ->
@@ -250,21 +255,22 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
 
 % Funzione invocata per inviare find_node (bloccante)
 send_find_node(Pid, TargetId, From, Timeout) ->
+    [H | _] = From,
     % Invia il messaggio find_node al nodo destinazione
-    Pid ! {find_node, TargetId, self()},
+    Pid ! {find_node, TargetId, [self()] ++ From},
     % Imposta il timeout
     receive
         {find_result, FoundId, FoundPid} ->
             %  io:format("Risultato trovato dopo ~p secondi: Nodo ID ~p, PID ~p~n", [
             %     Timeout, FoundId, FoundPid
             % ]),
-            From ! {find_result, FoundId, FoundPid};
+            H ! {find_result, FoundId, FoundPid};
         % se non lo trova
         {find_result, not_found} ->
-            From ! {find_result, not_found}
+            H ! {find_result, not_found}
     after Timeout * 1000 ->
         io:format("Timeout dopo ~p secondi: Nessun risultato trovato~n", [Timeout]),
-        From ! {find_result, not_found}
+        H ! {find_result, not_found}
     end.
 
 % funzione per propagare il ping (bloccante)
@@ -310,4 +316,37 @@ find_closest(TargetId, K_buckets) ->
             ),
             % Restituisce il nodo più vicino
             hd(Sorted)
+        % check se Sorted == FROM
+    end.
+
+% funzione per aggiornare la K_buckets dopo l'avvenuta di un ping (NON USATA ANCORA)
+update_buckets_after_ping(List, NewElement) ->
+    case length(List) < 4 of
+        true ->
+            % Se ci sono meno di 4 elementi, aggiungi semplicemente il nuovo elemento
+            List ++ [NewElement];
+        false ->
+            % Trova l'elemento con Last_time più piccolo
+            {_, SmallestElement} =
+                lists:foldl(
+                    fun(Elem = {_, _, _, LastTime}, {MinTime, MinElem}) ->
+                        case LastTime < MinTime of
+                            true -> {LastTime, Elem};
+                            false -> {MinTime, MinElem}
+                        end
+                    end,
+                    % Valori iniziali
+                    {infinity, undefined},
+                    List
+                ),
+            % Rimpiazza l'elemento con Last_time più piccolo con il nuovo elemento
+            lists:map(
+                fun(Elem) ->
+                    case Elem == SmallestElement of
+                        true -> NewElement;
+                        false -> Elem
+                    end
+                end,
+                List
+            )
     end.

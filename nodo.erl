@@ -73,46 +73,57 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                 K_buckets
             ),
             node_behavior({Id, Storage, UpdatedBuckets, T});
+        % nuovo comportamento del ping
+        {ping, Id, From} ->
+            io:format("[PING] PONG\n", []),
+            CurrentTime = erlang:system_time(microsecond),
+            [H | _] = From,
+            H ! {ping_result, trovato, CurrentTime, self()},
+            node_behavior({Id, Storage, K_buckets, Timer});
         % messaggio per effettuare un ping tramite l'identificativo della
         % rete kademlia
-        {ping, TargetId, FromTo} ->
+        {ping, TargetId, From} ->
+            StartTime = erlang:system_time(microsecond),
             % cerco se è gia' presente nei propri k_buckets
-            List = lists:keyfind(TargetId, 2, K_buckets),
-            case List of
-                % se non è presente, contatto il nodo più vicino:
+            [H | _] = From,
+            %% check 2
+            case lists:keyfind(TargetId, 2, K_buckets) of
                 false ->
-                    ClosestNode = find_closest(TargetId, K_buckets),
+                    % CHECK: se ClosestPid == From -> find_closest(TargetId, (K_buckets - closestPid)
+                    Bucktes_noLoop = lists:filter(
+                        fun({_, _, X, _}) -> not lists:member(X, From) end, K_buckets
+                    ),
+                    % Nodo non trovato localmente, inoltra al nodo più vicino
+                    ClosestNode = find_closest(TargetId, Bucktes_noLoop),
                     case ClosestNode of
                         undefined ->
-                            FromTo ! {ping_result, not_found};
+                            % Nessun nodo disponibile nei k-buckets
+                            H ! {ping_result, not_found};
                         {_, _, ClosestPid, _} ->
-                            send_ping_node(ClosestPid, TargetId, FromTo, 30)
+                            % CHECK: se ClosestPid == From -> find_closest(TargetId, (K_buckets - closestPid)
+                            io:format(
+                                "[PING] Nodo più vicino trovato: ~p. Inoltro la richiesta...~n\n",
+                                [
+                                    ClosestPid
+                                ]
+                            ),
+                            % Invio della richiesta al nodo più vicino (bloccante per 5 secondi)
+                            send_ping_node(ClosestPid, TargetId, From, 5)
                     end,
                     node_behavior({Id, Storage, K_buckets, Timer});
-                % se è presente, contatto il nodo direttamente:
-                {_, _, Pid, _} ->
-                    io:format("Trovato......\n"),
-                    % aggiorno il campo Timer del nodo che ha ricevuto il ping
-                    CurrentTime = erlang:system_time(second),
-                    % Pid ! {changeTimer, CurrentTime, FromTo},
-
-                    % contatto il nodo mittente per aggiornare il suo last_timer
-                    % riguardo al nodo destinatario
-                    %FromTo ! {newBuckets, ping, Pid, UpdatedBuckets},
-                    % contatto il nodo mittente per segnalare che il risultato positivo
-                    FromTo ! {ping_result, trovato, CurrentTime, Pid},
-                    % controllo se il destinatorio (nodo corrente)
-                    % ha la k_bucket completa, se così fosse sostituisco il nodo piu'
-                    % vecchio con il mittente del ping
-                    % D = TargetId bxor Id,
-                    %NewElement = {D, TargetId, Pid, CurrentTime},
-                    %  update_buckets_after_ping(K_buckets, NewElement),
+                {_, _, ClosestPidInit, _} ->
+                    % Nodo trovato, restituisci il risultato all'indietro
+                    EndTime = erlang:system_time(microsecond),
+                    io:format("[PING] Tempo impiegato per trovare un nodo: ~ps\n", [
+                        EndTime - StartTime
+                    ]),
+                    ClosestPidInit ! {ping, TargetId, [self()] ++ From},
                     node_behavior({Id, Storage, K_buckets, Timer})
             end;
         % messaggio per segnalare che il ping è avvenuto con successo
         {ping_result, trovato, CurrentTime, Pid} ->
             io:format("PONG", []),
-            % devo aggiornare anche il mio campo della K_bucket
+            % devo aggiornare anche il mio campo della K_buckets
             % perchè ho verificato che un nodo sia raggiungibile
             UpdatedBuckets = lists:map(
                 fun
@@ -149,7 +160,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             ),
             case Exists of
                 true -> node_behavior({Id, Storage, Lista, Timer});
-                false -> node_behavior({Id, Storage, K_buckets, Timer})
+                _ -> node_behavior({Id, Storage, K_buckets, Timer})
             end;
         {store, Value} ->
             Key = crypto:hash(sha256, Value),
@@ -169,6 +180,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
         % messaggio per trovare un nodo, dato il suo Id
         {find_node, TargetId, From} ->
             StartTime = erlang:system_time(second),
+            [H | _] = From,
             %% check 2
             case lists:keyfind(TargetId, 2, K_buckets) of
                 false ->
@@ -181,7 +193,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                     case ClosestNode of
                         undefined ->
                             % Nessun nodo disponibile nei k-buckets
-                            From ! {find_result, not_found};
+                            H ! {find_result, not_found};
                         {_, _, ClosestPid, _} ->
                             % CHECK: se ClosestPid == From -> find_closest(TargetId, (K_buckets - closestPid)
                             io:format(
@@ -194,7 +206,6 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                     end,
                     node_behavior({Id, Storage, K_buckets, Timer});
                 {_, FoundId, FoundPid, _} ->
-                    [H | _] = From,
                     % Nodo trovato, restituisci il risultato all'indietro
                     EndTime = erlang:system_time(second),
                     io:format("Tempo impiegato per trovare un nodo: ~ps\n", [EndTime - StartTime]),
@@ -275,16 +286,15 @@ send_find_node(Pid, TargetId, From, Timeout) ->
 
 % funzione per propagare il ping (bloccante)
 send_ping_node(Pid, TargetId, From, Timeout) ->
-    Pid ! {ping, TargetId, From},
+    [H | _] = From,
+    Pid ! {ping, TargetId, [self()] ++ From},
     receive
-        {ping_result, trovato, CurrentTime, Pid} ->
-            io:format("La funzione ha ricevuto con successo e non è stata bloccata\n", []),
-            From ! {ping_result, trovato, CurrentTime, Pid};
-        {ping_result, not_found} ->
-            io:format("Nodo PINGATO non trovato!", [])
+        {ping_result, trovato, CurrentTime, RPid} ->
+            io:format("[PING] La funzione ha ricevuto con successo e non è stata bloccata\n", []),
+            H ! {ping_result, trovato, CurrentTime, RPid}
     after Timeout * 1000 ->
         io:format("Timeout dopo ~p secondi: Nessuna risposta dal nodo ~p~n", [Timeout, Pid]),
-        From ! {ping_result, not_found}
+        H ! {ping_result, not_found}
     end.
 
 % funzione per propagare il find_value (bloccante)
@@ -301,8 +311,8 @@ send_find_value(Pid, Key, From, Timeout) ->
     end.
 
 % funzione per trovare il nodo più vicino
-find_closest(TargetId, K_buckets) ->
-    case K_buckets of
+find_closest(TargetId, K_bucketsTMP) ->
+    case K_bucketsTMP of
         [] ->
             % Nessun nodo nei k-buckets
             undefined;
@@ -312,7 +322,11 @@ find_closest(TargetId, K_buckets) ->
                 fun({Distance1, _, _, _}, {Distance2, _, _, _}) ->
                     Distance1 < Distance2
                 end,
-                [{TargetId bxor Id, Id, Pid, LastPing} || {_, Id, Pid, LastPing} <- K_buckets]
+                %[{TargetId bxor Id, Id, Pid, LastPing} || {_, Id, Pid, LastPing} <- K_buckets]% da trasaformare in map
+                lists:map(
+                    fun({_, Id, Pid, LastPing}) -> {TargetId bxor Id, Id, Pid, LastPing} end,
+                    K_bucketsTMP
+                )
             ),
             % Restituisce il nodo più vicino
             hd(Sorted)

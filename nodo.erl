@@ -18,7 +18,7 @@ new_kademlia_node(P) ->
     InitialValues = {"idTMP", [[Key, Storage]], [], 0},
     % effettuo la spawn del nodo vero e proprio con i parametri
     % temporanei iniziali
-    Pid = spawn(fun() -> node_behavior(InitialValues) end),
+    Pid = spawn(node(), fun() -> node_behavior(InitialValues) end),
     % restituisco il Pid del nodo di cui ho effettuato la spawn
     % al nodo invocante (i.e. shell)
     P ! {ok, Pid}.
@@ -90,33 +90,45 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                             FromTo ! {ping_result, not_found};
                         {_, _, ClosestPid, _} ->
                             send_ping_node(ClosestPid, TargetId, FromTo, 30)
-                    end;
+                    end,
+                    node_behavior({Id, Storage, K_buckets, Timer});
                 % se è presente, contatto il nodo direttamente:
                 {_, _, Pid, _} ->
+                    io:format("Trovato......\n"),
                     % aggiorno il campo Timer del nodo che ha ricevuto il ping
                     CurrentTime = erlang:system_time(second),
-                    Pid ! {changeTimer, CurrentTime, FromTo},
-                    % devo aggiornare anche il mio campo della K_bucket
-                    % perchè ho verificato che un nodo sia raggiungibile
-                    UpdatedBuckets = lists:map(
-                        fun
-                            ({Distance, Id_tmp, OtherPid, _}) when OtherPid =:= Pid ->
-                                % Aggiorna last_ping con T
-                                {Distance, Id_tmp, Pid, CurrentTime};
-                            (Node) ->
-                                % Lascia inalterati gli altri nodi
-                                Node
-                        end,
-                        K_buckets
-                    ),
-                    FromTo ! {newBuckets, UpdatedBuckets},
-                    FromTo ! {ping_result, trovato}
-            end,
-            node_behavior({Id, Storage, K_buckets, Timer});
+                    % Pid ! {changeTimer, CurrentTime, FromTo},
+
+                    % contatto il nodo mittente per aggiornare il suo last_timer
+                    % riguardo al nodo destinatario
+                    %FromTo ! {newBuckets, ping, Pid, UpdatedBuckets},
+                    % contatto il nodo mittente per segnalare che il risultato positivo
+                    FromTo ! {ping_result, trovato, CurrentTime, Pid},
+                    % controllo se il destinatorio (nodo corrente)
+                    % ha la k_bucket completa, se così fosse sostituisco il nodo piu'
+                    % vecchio con il mittente del ping
+                    % D = TargetId bxor Id,
+                    %NewElement = {D, TargetId, Pid, CurrentTime},
+                    %  update_buckets_after_ping(K_buckets, NewElement),
+                    node_behavior({Id, Storage, K_buckets, Timer})
+            end;
         % messaggio per segnalare che il ping è avvenuto con successo
-        {ping_result, trovato} ->
+        {ping_result, trovato, CurrentTime, Pid} ->
             io:format("PONG", []),
-            node_behavior({Id, Storage, K_buckets, Timer});
+            % devo aggiornare anche il mio campo della K_bucket
+            % perchè ho verificato che un nodo sia raggiungibile
+            UpdatedBuckets = lists:map(
+                fun
+                    ({Distance, Id_tmp, OtherPid, _}) when OtherPid =:= Pid ->
+                        % Aggiorna last_ping con T
+                        {Distance, Id_tmp, Pid, CurrentTime};
+                    (Node) ->
+                        % Lascia inalterati gli altri nodi
+                        Node
+                end,
+                K_buckets
+            ),
+            node_behavior({Id, Storage, UpdatedBuckets, Timer});
         % messaggio per segnalare che il ping è fallito
         {ping_result, not_found} ->
             io:format("PANG", []),
@@ -129,6 +141,19 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
         % aggiorna i buckets del nodo corrente
         {newBuckets, Lista} ->
             node_behavior({Id, Storage, Lista, Timer});
+        % aggiorna i buckets durante il ping
+        {newBuckets, ping, Pid, Lista} ->
+            % Verifica se esiste una tupla con OtherPid == Pid
+            Exists = lists:any(
+                fun({_, _, OtherPid, _}) ->
+                    OtherPid == Pid
+                end,
+                K_buckets
+            ),
+            case Exists of
+                true -> node_behavior({Id, Storage, Lista, Timer});
+                false -> node_behavior({Id, Storage, K_buckets, Timer})
+            end;
         {store, Value} ->
             Key = crypto:hash(sha256, Value),
             NewStorage = [[Key, Value] | Storage],
@@ -174,13 +199,13 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                     From ! {find_result, FoundId, FoundPid},
                     node_behavior({Id, Storage, K_buckets, Timer})
             end;
-        % Quando il nodo corrente riceve il risultato della ricerca
-        {find_result, FoundId, FoundPid} ->
-            io:format("Nodo trovato: ID ~p, PID ~p~n", [FoundId, FoundPid]),
-            node_behavior({Id, Storage, K_buckets, Timer});
         {find_result, not_found} ->
             io:format("Nodo non trovato\n", []),
             % ricerca di un valore nello storage data la key associata al valore
+            node_behavior({Id, Storage, K_buckets, Timer});
+        % Quando il nodo corrente riceve il risultato della ricerca
+        {find_result, FoundId, FoundPid} ->
+            io:format("Nodo trovato: ID ~p, PID ~p~n", [FoundId, FoundPid]),
             node_behavior({Id, Storage, K_buckets, Timer});
         {find_value, Key, From} ->
             % Controlla prima nel proprio storage
@@ -204,8 +229,10 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                         [] ->
                             % Nessun nodo disponibile, restituisci not_found
                             From ! {value_not_found, Key};
-                        [{_, _, ClosestPid, _} | _] ->
-                            % Inoltra al nodo più vicino
+                        % ERRORE IL 'CLOSERPID' DEVE ESSERE DATO DAL HASH_CHIAVE XOR IDS DELLA K_BUCKETS (PRENDO IL PIù VICINO)
+                        _ ->
+                            ClosestPid = find_closest(Key, K_buckets),
+                            % Inoltra al nodo più vicino, rispetto alla chiave
                             % ClosestPid ! {find_value, Key, From} FUNZIONA MA NON è BLOCCANTE
                             send_find_value(ClosestPid, Key, From, 30)
                     end
@@ -245,10 +272,13 @@ send_find_node(Pid, TargetId, From, Timeout) ->
 
 % funzione per propagare il ping (bloccante)
 send_ping_node(Pid, TargetId, From, Timeout) ->
-    Pid ! {ping, TargetId, self()},
+    Pid ! {ping, TargetId, From},
     receive
-        {ping_result, Result} ->
-            From ! {ping_result, Result}
+        {ping_result, trovato, CurrentTime, Pid} ->
+            io:format("La funzione ha ricevuto con successo e non è stata bloccata\n", []),
+            From ! {ping_result, trovato, CurrentTime, Pid};
+        {ping_result, not_found} ->
+            io:format("Nodo PINGATO non trovato!", [])
     after Timeout * 1000 ->
         io:format("Timeout dopo ~p secondi: Nessuna risposta dal nodo ~p~n", [Timeout, Pid]),
         From ! {ping_result, not_found}
@@ -267,6 +297,38 @@ send_find_value(Pid, Key, From, Timeout) ->
         From ! {value_not_found, Key}
     end.
 
+% funzione per aggiornare la K_buckets dopo l'avvenuta di un ping
+update_buckets_after_ping(List, NewElement) ->
+    case length(List) < 4 of
+        true ->
+            % Se ci sono meno di 4 elementi, aggiungi semplicemente il nuovo elemento
+            List ++ [NewElement];
+        false ->
+            % Trova l'elemento con Last_time più piccolo
+            {_, SmallestElement} =
+                lists:foldl(
+                    fun(Elem = {_, _, _, LastTime}, {MinTime, MinElem}) ->
+                        case LastTime < MinTime of
+                            true -> {LastTime, Elem};
+                            false -> {MinTime, MinElem}
+                        end
+                    end,
+                    % Valori iniziali
+                    {infinity, undefined},
+                    List
+                ),
+            % Rimpiazza l'elemento con Last_time più piccolo con il nuovo elemento
+            lists:map(
+                fun(Elem) ->
+                    case Elem == SmallestElement of
+                        true -> NewElement;
+                        false -> Elem
+                    end
+                end,
+                List
+            )
+    end.
+
 % inizializzazione della rete di kademlia con la
 % creazione del nodo boostrapt
 start_system(P) ->
@@ -281,12 +343,13 @@ start_system(P) ->
     NodeId = rand:uniform(1 bsl 160 - 1),
     % generazione di un Id casuale per il 'backup'
     BackupNodeId = rand:uniform(1 bsl 160 - 1),
-    Pid = spawn(fun() -> init_bootstrap(NodeId, primary) end),
+    Pid = spawn(node(), fun() -> init_bootstrap(NodeId, primary) end),
     % registrazione del Bootstrap 'backup'
-    register(bootstrap, Pid),
+    global:register_name(bootstrap, Pid),
     % inoltro del messaggio per creare il nodo di backup
     % del bootstrap, al bootstrap principale
     Pid ! {createBackup, BackupNodeId},
+    global:sync(),
     P ! {ok}.
 
 % utilizzato per impostare il 'trap_exit' a true.
@@ -306,9 +369,9 @@ bootstrap_node_loop(Id, Role) ->
         % messaggio per creare il backup
         {createBackup, BackupId} ->
             % effettuo la spawn per creare il backup
-            BackupPid = spawn_link(fun() -> init_bootstrap(BackupId, backup) end),
+            BackupPid = spawn_link(node(), fun() -> init_bootstrap(BackupId, backup) end),
             % registro il backup
-            register(
+            global:register_name(
                 backup_bootstrap, BackupPid
             ),
             io:format("Nodo backup del bootstrap creato.", []),
@@ -382,24 +445,24 @@ bootstrap_node_loop(Id, Role) ->
                     io:format(
                         "Il nodo di backup è morto. Creazione di un nuovo nodo di backup.~n"
                     ),
-                    NewBackupPid = spawn_link(fun() ->
+                    NewBackupPid = spawn_link(node(), fun() ->
                         bootstrap_node_loop(rand:uniform(1 bsl 160 - 1), backup)
                     end),
-                    register(backup_bootstrap, NewBackupPid),
+                    global:register_name(backup_bootstrap, NewBackupPid),
                     bootstrap_node_loop(Id, primary);
                 backup ->
                     % il principale è morto
                     io:format(
                         "Il nodo principale è morto. Divento il nuovo principale e creo un nuovo backup.~n"
                     ),
-                    unregister(backup_bootstrap),
-                    register(bootstrap, self()),
+                    global:unregister_name(backup_bootstrap),
+                    global:register_name(bootstrap, self()),
 
                     % Creazione del nuovo nodo di backup
-                    NewBackupPid = spawn_link(fun() ->
+                    NewBackupPid = spawn_link(node(), fun() ->
                         bootstrap_node_loop(rand:uniform(1 bsl 160 - 1), backup)
                     end),
-                    register(backup_bootstrap, NewBackupPid),
+                    global:register_name(backup_bootstrap, NewBackupPid),
                     bootstrap_node_loop(Id, primary)
             end;
         % messaggio generico

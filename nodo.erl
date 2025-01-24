@@ -40,7 +40,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             node_behavior({Id, Storage, K_buckets, Timer});
         % messaggio per l'invio periodico dello Storage ai suoi nodi della k_buckets
         {send_periodic} ->
-            % identifica i nodi del k_buckets vivi
+            % identifica i nodi del k_buckets vivi (NECESSARI ALTRI TEST)
             % Filtro dei nodi in K_buckets, mantenendo solo quelli che rispondono al ping
             FilteredBuckets = lists:filter(
                 % abbiamo giaà il pid quindi è più sempice
@@ -59,7 +59,8 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             ),
             % Avvia il prossimo ciclo dopo 30 secondi
             timer:send_after(30000, self(), {send_periodic}),
-            node_behavior({Id, Storage, K_buckets, Timer});
+            % la nuova k_buckets è composta solamente dai nodi che hanno risposto al ping
+            node_behavior({Id, Storage, FilteredBuckets, Timer});
         % messaggio per ricevere un ping, se conosce il Pid del processo Erlang
         % utilizzato per cavpire se un nodo è vivo o meno
         {pingTo, To} ->
@@ -271,6 +272,9 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
         {value_not_found, Key} ->
             io:format("Valore non trovato per chiave: ~p~n", [Key]),
             node_behavior({Id, Storage, K_buckets, Timer});
+        % messaggio per far morire un nodo
+        {crash} ->
+            exit(errore);
         % comportamento generico
         _ ->
             node_behavior({Id, Storage, K_buckets, Timer})

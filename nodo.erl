@@ -40,7 +40,8 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             node_behavior({Id, Storage, K_buckets, Timer});
         % messaggio per l'invio periodico dello Storage ai suoi nodi della k_buckets
         {send_periodic} ->
-            % Invia un messaggio a tutti i nodi nei K_buckets
+            % identifica i nodi del k_buckets vivi
+            % Invia un messaggio a tutti i nodi nei K_buckets vivi
             lists:foreach(
                 fun({_, _, Pid, _}) ->
                     %io:format("Inoltro dello Storage...", []),
@@ -49,7 +50,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                 K_buckets
             ),
             % Avvia il prossimo ciclo dopo 30 secondi
-            %  timer:send_after(30000, self(), {send_periodic}), DA RIATTIVARE !!!
+            timer:send_after(30000, self(), {send_periodic}),
             node_behavior({Id, Storage, K_buckets, Timer});
         % messaggio per  ricevere un ping, solo io:format() su shell
         {pingTo, To} ->
@@ -243,10 +244,10 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                     case K_buckets of
                         [] ->
                             % Nessun nodo disponibile, restituisci not_found
-                            From ! {value_not_found, Key};
+                            H ! {value_not_found, Key};
                         % la chiave è data da un hash a 160 bit
                         _ ->
-                            ClosestPid = find_closest(Key, K_buckets),
+                            {_, _, ClosestPid, _} = find_closest(Key, K_buckets),
                             % Inoltra al nodo più vicino, rispetto alla chiave
                             % ClosestPid ! {find_value, Key, From} FUNZIONA MA NON è BLOCCANTE
                             send_find_value(ClosestPid, Key, From, 30)
@@ -310,7 +311,7 @@ send_find_value(Pid, Key, From, Timeout) ->
             H ! {value_not_found, Key}
     after Timeout * 1000 ->
         io:format("Timeout dopo ~p secondi: Nessun valore trovato per Key=~p~n", [Timeout, Key]),
-        From ! {value_not_found, Key}
+        H ! {value_not_found, Key}
     end.
 
 % funzione per trovare il nodo più vicino

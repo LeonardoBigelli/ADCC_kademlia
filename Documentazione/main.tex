@@ -21,7 +21,7 @@
 
 \usepackage{biblatex} %Imports biblatex package
 \addbibresource{Bibliography.bib}
-\title{\color{FireBrick}\bf{Implementazione in Earlang del protocollo Kademlia}}
+\title{\color{FireBrick}\bf{Implementazione in Erlang del protocollo Kademlia}}
 \author[1]{\color{FireBrick}\bf{Arlind Pecmarkaj}}
 \author[2]{\color{FireBrick}\bf{Leonardo Bigelli}}
 
@@ -55,7 +55,7 @@
 [{
 \maketitle
 \thispagestyle{firstpage}
-\title{\color{Black}\bf{Implementazione in Earlang del protocollo Kademlia}}
+\title{\color{Black}\bf{Implementazione in Erlang del protocollo Kademlia}}
 %------------------------------------------                                                           
 %                   Abstract
 %------------------------------------------
@@ -98,7 +98,7 @@ Si è deciso di rappresentare un nodo come una tupla formata da:
 \begin{itemize}
     \item \texttt{\{ID, Storage, K\_Buckets, Timer\}}, dove:
     \begin{itemize}
-        \item \textbf{ID}: Un identificatore univoco del nodo, rappresentato come stringa casuale simulando un hash crittografico (es. SHA256).
+        \item \textbf{ID}: Un identificatore univoco del nodo da 160 bit per poter implementare la distanza tramite XOR. Implementato attraverso l'hash con SHA di una stringa di 5 caratteri. I caratteri sono generati casualmente seguendo una distribuzione uniforme nello spazio delle 26 lettere dell'alfabeto. 
         \item \textbf{Storage}: Una lista di coppie chiave-valore (la coppia è rappresentata da una lista) \texttt{[Key, Value]}, utilizzata per memorizzare i dati localmente.
         \item \textbf{K\_Buckets}: Una lista strutturata che rappresenta la vista del nodo sui nodi vicini. Ogni K-bucket è rappresentato come una tupla \texttt{\{Distance, Nodi\}} dove:
         \begin{itemize}
@@ -109,9 +109,10 @@ Si è deciso di rappresentare un nodo come una tupla formata da:
     \end{itemize}
 \end{itemize}
 
+Ogni nodo viene avviato come un processo indipendente tramite la funzione \texttt{spawn}, che ne consente l'esecuzione concorrente e la comunicazione asincrona.
+
 I K-buckets vengono  e vengono aggiornati dinamicamente in base alla distanza XOR. Ogni bucket mantiene una lista ordinata di nodi vicini, in modo da ottimizzare il routing nella rete.
 
-Ogni nodo viene avviato come un processo indipendente tramite la funzione \texttt{spawn}, che ne consente l'esecuzione concorrente e la comunicazione asincrona.
 
 Per i K-Buckets si è deciso di implementare:
 \begin{itemize}
@@ -125,6 +126,8 @@ Per i K-Buckets si è deciso di implementare:
         \item Ogni nodo memorizza un timer per ogni peer nella sua lista, eliminando i nodi inattivi dopo un certo periodo.
     \end{itemize}
 \end{itemize}
+Si è deciso di tenere 4 K-Buckets per nodo, di cui 2 sono per i nodi a distanza vicina, uno a quelli a distanza intermedia e una per quelli alla distanza più lontana possibile. Inoltre il nodo può memorizzare un set ridotto di nodi, ma sufficiente a garantire una copertura ampia, consentendo una navigazione efficiente nella rete senza sovraccaricare la memoria o introdurre eccessiva latenza. Oltretutto vengono semplificate le operazioni di aggiornamento e refresh delle informazioni sui nodu in quanto la dimensione limitata dei k-buckets riduce la complessità computazionale date dalle operazioni di aggiunta e rimozione dei nodi.
+
 
 \subsection{Comportamento dei Nodi}
 Il comportamento di un nodo è definito dalla funzione \texttt{node\_behavior/1}, che implementa un ciclo di ricezione (\texttt{receive}) per gestire i messaggi. I principali messaggi gestiti includono:
@@ -133,6 +136,7 @@ Il comportamento di un nodo è definito dalla funzione \texttt{node\_behavior/1}
     \begin{itemize}
         \item Se il nodo target è presente nei K-buckets, viene contattato direttamente.
         \item Se il target non è nei K-buckets, il ping viene inoltrato al nodo più vicino utilizzando la funzione \texttt{find\_closest/2}.
+        \item Per evitare loop, viene attuata una politica di ignoramento verso i nodi già visitati.
     \end{itemize}
     \item \textbf{\texttt{store}}:
     \begin{itemize}
@@ -143,6 +147,7 @@ Il comportamento di un nodo è definito dalla funzione \texttt{node\_behavior/1}
     \begin{itemize}
         \item Cerca un nodo specifico nei K-buckets locali.
         \item Se il nodo non è trovato, la richiesta viene inoltrata al nodo più vicino.
+        \item Come per il ping, i nodi già visitati non vengono considerati per evitare loop.
     \end{itemize}
     \item \textbf{\texttt{find\_value}}:
     \begin{itemize}

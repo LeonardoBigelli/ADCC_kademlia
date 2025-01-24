@@ -14,7 +14,7 @@ start_system(P) ->
     mnesia:create_table(bootstrap_table, [
         {attributes, record_info(fields, bootstrap_table)},
         {type, set},
-        {disc_copies, [node()]}
+        {ram_copies, [node()]}
     ]),
     % generazione di un Id casuale per il 'principale'
     NodeId = rand:uniform(1 bsl 160 - 1),
@@ -58,7 +58,9 @@ bootstrap_node_loop(Id, Role) ->
             Time = erlang:system_time(second),
             io:format("[[--BOOSTRAP--]] --> Richiesta di entrare nella rete da da: ~p~n .", [From]),
             % creazione id del nuovo nodo
-            NodeId = rand:uniform(1 bsl 160 - 1),
+            NodeId = crypto:hash(
+                sha, lists:map(fun(_) -> rand:uniform(26) + $a - 1 end, lists:seq(1, 5))
+            ),
             % Transazione per aggiungere il nodo nella tabella Mnesia
             case
                 mnesia:transaction(fun() ->
@@ -186,7 +188,8 @@ get_4_buckets(NodeId) ->
                         Acc;
                     false ->
                         % Calcola la distanza XOR e aggiungi alla lista
-                        Distance = NodeId bxor Id,
+                        %Distance = NodeId bxor Id,
+                        Distance = calculate_distance(NodeId, Id),
                         Acc ++ [{Distance, Id, Pid, L}]
                 end
             end,
@@ -220,3 +223,13 @@ get_4_buckets(NodeId) ->
             UniqueNodes = lists:usort(ClosestTwo ++ [MiddleNode, FarthestNode]),
             lists:sublist(UniqueNodes, 4)
     end.
+
+%%% Funzione per calcolare la distanza tra due binari
+calculate_distance(Bin1, Bin2) when is_binary(Bin1), is_binary(Bin2) ->
+    calculate_distance(binary:bin_to_list(Bin1), binary:bin_to_list(Bin2));
+calculate_distance([Byte1 | Rest1], [Byte2 | Rest2]) ->
+    abs(Byte1 - Byte2) + calculate_distance(Rest1, Rest2);
+calculate_distance([], []) ->
+    0;
+calculate_distance(_, _) ->
+    erlang:error({badarg, "Binary lengths must match"}).

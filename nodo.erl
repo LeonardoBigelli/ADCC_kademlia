@@ -9,8 +9,8 @@
 new_kademlia_node(P) ->
     % valore casuale (stringa)
     Storage = generate_random_string(5),
-    %Key = crypto:hash(sha256, Storage), NON SI USA SOLO PER IL TEST
-    Key = generate_random_string(3),
+    Key = crypto:hash(sha, Storage),
+    %Key = generate_random_string(3), SOLO PER TESTING!!!
     % inizializzazione temporanea dei valori di un nodo
     InitialValues = {"idTMP", [[Key, Storage]], [], 0},
     % effettuo la spawn del nodo vero e proprio con i parametri
@@ -49,7 +49,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                 K_buckets
             ),
             % Avvia il prossimo ciclo dopo 30 secondi
-            timer:send_after(30000, self(), {send_periodic}),
+            %  timer:send_after(30000, self(), {send_periodic}), DA RIATTIVARE !!!
             node_behavior({Id, Storage, K_buckets, Timer});
         % messaggio per  ricevere un ping, solo io:format() su shell
         {pingTo, To} ->
@@ -163,7 +163,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                 _ -> node_behavior({Id, Storage, K_buckets, Timer})
             end;
         {store, Value} ->
-            Key = crypto:hash(sha256, Value),
+            Key = crypto:hash(sha, Value),
             NewStorage = [[Key, Value] | Storage],
             node_behavior({Id, NewStorage, K_buckets, Timer});
         % messaggio per aggiungere elementi al mio store se non
@@ -221,6 +221,8 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             io:format("Nodo trovato: ID ~p, PID ~p~n", [FoundId, FoundPid]),
             node_behavior({Id, Storage, K_buckets, Timer});
         {find_value, Key, From} ->
+            % From è una lista
+            [H | _] = From,
             % Controlla prima nel proprio storage
             MyStorage = lists:foldl(
                 fun
@@ -235,14 +237,14 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             case MyStorage of
                 [Key, Value] ->
                     % Trovato nel proprio storage, restituisci il valore
-                    From ! {value_found, Key, Value};
+                    H ! {value_found, Key, Value};
                 [] ->
-                    % Non trovato, inoltra al primo nodo nei k_buckets
+                    % Non trovato, inoltra al primo nodo nei k_buckets più vicino alla chiave
                     case K_buckets of
                         [] ->
                             % Nessun nodo disponibile, restituisci not_found
                             From ! {value_not_found, Key};
-                        % ERRORE IL 'CLOSERPID' DEVE ESSERE DATO DAL HASH_CHIAVE XOR IDS DELLA K_BUCKETS (PRENDO IL PIù VICINO)
+                        % la chiave è data da un hash a 160 bit
                         _ ->
                             ClosestPid = find_closest(Key, K_buckets),
                             % Inoltra al nodo più vicino, rispetto alla chiave
@@ -253,7 +255,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             node_behavior({Id, Storage, K_buckets, Timer});
         % Quando riceve un valore trovato
         {value_found, Key, Value} ->
-            io:format("Valore trovato: ~p -> ~p~n", [Key, Value]),
+            io:format("Valore trovato: ~p -> ~p~n\n", [Key, Value]),
             node_behavior({Id, Storage, K_buckets, Timer});
         % Quando il valore non è stato trovato
         {value_not_found, Key} ->
@@ -299,12 +301,13 @@ send_ping_node(Pid, TargetId, From, Timeout) ->
 
 % funzione per propagare il find_value (bloccante)
 send_find_value(Pid, Key, From, Timeout) ->
-    Pid ! {find_value, Key, self()},
+    [H | _] = From,
+    Pid ! {find_value, Key, [self()] ++ From},
     receive
         {value_found, Key, Value} ->
-            From ! {value_found, Key, Value};
+            H ! {value_found, Key, Value};
         {value_not_found, Key} ->
-            From ! {value_not_found, Key}
+            H ! {value_not_found, Key}
     after Timeout * 1000 ->
         io:format("Timeout dopo ~p secondi: Nessun valore trovato per Key=~p~n", [Timeout, Key]),
         From ! {value_not_found, Key}
@@ -324,13 +327,30 @@ find_closest(TargetId, K_bucketsTMP) ->
                 end,
                 %[{TargetId bxor Id, Id, Pid, LastPing} || {_, Id, Pid, LastPing} <- K_buckets]% da trasaformare in map
                 lists:map(
-                    fun({_, Id, Pid, LastPing}) -> {TargetId bxor Id, Id, Pid, LastPing} end,
+                    fun({_, Id, Pid, LastPing}) ->
+                        {binary_xor(TargetId, Id), Id, Pid, LastPing}
+                    end,
                     K_bucketsTMP
                 )
             ),
             % Restituisce il nodo più vicino
             hd(Sorted)
         % check se Sorted == FROM
+    end.
+
+% funzione re-implementata per il calcolo della Binary-XOR (la distanza)
+binary_xor(Bin1, Bin2) when is_binary(Bin1), is_binary(Bin2) ->
+    case byte_size(Bin1) == byte_size(Bin2) of
+        true ->
+            lists:foldl(
+                fun({Byte1, Byte2}, Acc) ->
+                    Acc bsl 8 bor (Byte1 bxor Byte2)
+                end,
+                0,
+                lists:zip(binary:bin_to_list(Bin1), binary:bin_to_list(Bin2))
+            );
+        false ->
+            erlang:error(badarith)
     end.
 
 % funzione per aggiornare la K_buckets dopo l'avvenuta di un ping (NON USATA ANCORA)

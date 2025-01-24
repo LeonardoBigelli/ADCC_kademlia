@@ -41,20 +41,29 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
         % messaggio per l'invio periodico dello Storage ai suoi nodi della k_buckets
         {send_periodic} ->
             % identifica i nodi del k_buckets vivi
+            % Filtro dei nodi in K_buckets, mantenendo solo quelli che rispondono al ping
+            FilteredBuckets = lists:filter(
+                % abbiamo giaà il pid quindi è più sempice
+                fun({_, _, Pid, _}) ->
+                    send_is_alive(Pid, self())
+                end,
+                K_buckets
+            ),
             % Invia un messaggio a tutti i nodi nei K_buckets vivi
             lists:foreach(
                 fun({_, _, Pid, _}) ->
                     %io:format("Inoltro dello Storage...", []),
                     Pid ! {addToStore, Storage}
                 end,
-                K_buckets
+                FilteredBuckets
             ),
             % Avvia il prossimo ciclo dopo 30 secondi
             timer:send_after(30000, self(), {send_periodic}),
             node_behavior({Id, Storage, K_buckets, Timer});
-        % messaggio per  ricevere un ping, solo io:format() su shell
+        % messaggio per ricevere un ping, se conosce il Pid del processo Erlang
+        % utilizzato per cavpire se un nodo è vivo o meno
         {pingTo, To} ->
-            io:format("Ping ricevuto da: ~p", [To]),
+            To ! {ok},
             node_behavior({Id, Storage, K_buckets, Timer});
         % messaggio per cambiare il last_ping del nodo
         {changeTimer, T, FromTo} ->
@@ -352,6 +361,15 @@ binary_xor(Bin1, Bin2) when is_binary(Bin1), is_binary(Bin2) ->
             );
         false ->
             erlang:error(badarith)
+    end.
+
+%funzione isalive
+send_is_alive(Pid, FromTo) ->
+    Pid ! {pingTo, FromTo},
+    receive
+        {ok} -> true
+    after 1000 ->
+        false
     end.
 
 % funzione per aggiornare la K_buckets dopo l'avvenuta di un ping (NON USATA ANCORA)

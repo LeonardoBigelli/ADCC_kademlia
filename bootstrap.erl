@@ -55,7 +55,7 @@ bootstrap_node_loop(Id, Role) ->
             bootstrap_node_loop(Id, Role);
         % richiesta di un nodo di entrare nella rete
         {enter, From} ->
-            Time = erlang:system_time(second),
+            Time = erlang:system_time(microsecond),
             io:format("[[--BOOSTRAP--]] --> Richiesta di entrare nella rete da da: ~p~n .", [From]),
             % creazione id del nuovo nodo
             NodeId = crypto:hash(
@@ -99,7 +99,7 @@ bootstrap_node_loop(Id, Role) ->
                         end,
                         AllNodes
                     ),
-                    CurrentTime = erlang:system_time(second),
+                    CurrentTime = erlang:system_time(microsecond),
                     io:format("Tempo necessario per l'aggiunta: ~ps\n", [CurrentTime - Time]);
                 {_, Reason} ->
                     io:format("[[--BOOSTRAP--]] Errore durante l'aggiunta del nodo: ~p~n", [Reason])

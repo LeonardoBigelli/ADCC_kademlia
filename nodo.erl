@@ -38,29 +38,63 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                 Id, Storage, K_buckets, Timer
             ]),
             node_behavior({Id, Storage, K_buckets, Timer});
+        {getInfo, id, From} ->
+            From ! {getId, Id},
+            node_behavior({Id, Storage, K_buckets, Timer});
+        % messaggio utilizzato per la gestione della K_buckets dinamica
+        {isAlive, Pid, OtherId} ->
+            % controllo se è possibile inserire elementi
+            % nella propria K_buckets
+            case length(K_buckets) < 4 of
+                true -> NewKB = [{binary_xor(Id, OtherId), OtherId, Pid, 0}] ++ K_buckets;
+                false -> NewKB = K_buckets
+            end,
+            Pid ! {alive, self()},
+            node_behavior({Id, Storage, NewKB, Timer});
+        % messaggio utilizzato per la gestione della K_buckets dinamica
+        % rimozione dei nodi morti
+        {updateB, Pid} ->
+            NewKB = lists:foldr(
+                fun({A, B, C, D}, Acc) ->
+                    case C of
+                        Pid -> NewAcc = Acc;
+                        _ -> NewAcc = [{A, B, C, D}] ++ Acc
+                    end,
+                    NewAcc
+                end,
+                [],
+                K_buckets
+            ),
+            node_behavior({Id, Storage, NewKB, Timer});
         % messaggio per l'invio periodico dello Storage ai suoi nodi della k_buckets
         {send_periodic} ->
-            % identifica i nodi del k_buckets vivi (NECESSARI ALTRI TEST)
-            % Filtro dei nodi in K_buckets, mantenendo solo quelli che rispondono al ping
-            FilteredBuckets = lists:filter(
-                % abbiamo giaà il pid quindi è più sempice
-                fun({_, _, Pid, _}) ->
-                    send_is_alive(Pid, self())
+            Self = self(),
+            lists:foreach(
+                fun({_, OtherId, Pid, _}) ->
+                    spawn(
+                        fun() ->
+                            Pid ! {isAlive, self(), OtherId},
+                            receive
+                                {alive, Pid} -> ok
+                            after 5000 -> Self ! {updateB, Pid}
+                            end
+                        end
+                    )
                 end,
                 K_buckets
             ),
-            % Invia un messaggio a tutti i nodi nei K_buckets vivi
+            % Invia un messaggio a tutti i nodi nei K_buckets
             lists:foreach(
                 fun({_, _, Pid, _}) ->
                     %io:format("Inoltro dello Storage...", []),
                     Pid ! {addToStore, Storage}
                 end,
-                FilteredBuckets
+                K_buckets
             ),
             % Avvia il prossimo ciclo dopo 30 secondi
             timer:send_after(30000, self(), {send_periodic}),
             % la nuova k_buckets è composta solamente dai nodi che hanno risposto al ping
-            node_behavior({Id, Storage, FilteredBuckets, Timer});
+            node_behavior({Id, Storage, K_buckets, Timer});
         % messaggio per ricevere un ping, se conosce il Pid del processo Erlang
         % utilizzato per cavpire se un nodo è vivo o meno
         {pingTo, To} ->
@@ -189,8 +223,10 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             NewStorage = FilteredStore ++ Storage,
             node_behavior({Id, NewStorage, K_buckets, Timer});
         % messaggio per trovare un nodo, dato il suo Id
-        {find_node, TargetId, From} ->
-            StartTime = erlang:system_time(second),
+
+        % ultimo paramentro è il tempo
+        {find_node, TargetId, From, T} ->
+            % StartTime = erlang:system_time(microsecond),
             [H | _] = From,
             %% check 2
             case lists:keyfind(TargetId, 2, K_buckets) of
@@ -213,14 +249,14 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                                 ]
                             ),
                             % Invio della richiesta al nodo più vicino (bloccante per 5 secondi)
-                            send_find_node(ClosestPid, TargetId, From, 5)
+                            send_find_node(ClosestPid, TargetId, From, 5, T)
                     end,
                     node_behavior({Id, Storage, K_buckets, Timer});
                 {_, FoundId, FoundPid, _} ->
                     % Nodo trovato, restituisci il risultato all'indietro
-                    EndTime = erlang:system_time(second),
-                    io:format("Tempo impiegato per trovare un nodo: ~ps\n", [EndTime - StartTime]),
-                    H ! {find_result, FoundId, FoundPid},
+                    %EndTime = erlang:system_time(microsecond),
+                    %io:format("Tempo impiegato per trovare un nodo: ~ps\n", [EndTime - StartTime]),
+                    H ! {find_result, FoundId, FoundPid, T},
                     node_behavior({Id, Storage, K_buckets, Timer})
             end;
         {find_result, not_found} ->
@@ -228,8 +264,11 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             % ricerca di un valore nello storage data la key associata al valore
             node_behavior({Id, Storage, K_buckets, Timer});
         % Quando il nodo corrente riceve il risultato della ricerca
-        {find_result, FoundId, FoundPid} ->
-            io:format("Nodo trovato: ID ~p, PID ~p~n", [FoundId, FoundPid]),
+        {find_result, FoundId, FoundPid, StartTime} ->
+            EndTime = erlang:system_time(microsecond),
+            io:format("Nodo trovato: ID ~p, PID ~p, Tempo necessario: ~p micros\n", [
+                FoundId, FoundPid, EndTime - StartTime
+            ]),
             node_behavior({Id, Storage, K_buckets, Timer});
         {find_value, Key, From} ->
             % From è una lista
@@ -260,7 +299,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                             {_, _, ClosestPid, _} = find_closest(Key, K_buckets),
                             % Inoltra al nodo più vicino, rispetto alla chiave
                             % ClosestPid ! {find_value, Key, From} FUNZIONA MA NON è BLOCCANTE
-                            send_find_value(ClosestPid, Key, From, 30)
+                            send_find_value(ClosestPid, Key, From, 5)
                     end
             end,
             node_behavior({Id, Storage, K_buckets, Timer});
@@ -281,17 +320,14 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
     end.
 
 % Funzione invocata per inviare find_node (bloccante)
-send_find_node(Pid, TargetId, From, Timeout) ->
+send_find_node(Pid, TargetId, From, Timeout, StartTime) ->
     [H | _] = From,
     % Invia il messaggio find_node al nodo destinazione
-    Pid ! {find_node, TargetId, [self()] ++ From},
+    Pid ! {find_node, TargetId, [self()] ++ From, StartTime},
     % Imposta il timeout
     receive
-        {find_result, FoundId, FoundPid} ->
-            %  io:format("Risultato trovato dopo ~p secondi: Nodo ID ~p, PID ~p~n", [
-            %     Timeout, FoundId, FoundPid
-            % ]),
-            H ! {find_result, FoundId, FoundPid};
+        {find_result, FoundId, FoundPid, StartTime} ->
+            H ! {find_result, FoundId, FoundPid, StartTime};
         % se non lo trova
         {find_result, not_found} ->
             H ! {find_result, not_found}
@@ -372,38 +408,88 @@ send_is_alive(Pid, FromTo) ->
     Pid ! {pingTo, FromTo},
     receive
         {ok} -> true
-    after 1000 ->
+    after 5000 ->
         false
     end.
 
-% funzione per aggiornare la K_buckets dopo l'avvenuta di un ping (NON USATA ANCORA)
+% funzione per aggiornare la K_buckets, da chi riceve il ping
 update_buckets_after_ping(List, NewElement) ->
     case length(List) < 4 of
         true ->
             % Se ci sono meno di 4 elementi, aggiungi semplicemente il nuovo elemento
-            List ++ [NewElement];
+            [NewElement] ++ List;
         false ->
-            % Trova l'elemento con Last_time più piccolo
-            {_, SmallestElement} =
-                lists:foldl(
-                    fun(Elem = {_, _, _, LastTime}, {MinTime, MinElem}) ->
-                        case LastTime < MinTime of
-                            true -> {LastTime, Elem};
-                            false -> {MinTime, MinElem}
-                        end
-                    end,
-                    % Valori iniziali
-                    {infinity, undefined},
-                    List
-                ),
-            % Rimpiazza l'elemento con Last_time più piccolo con il nuovo elemento
-            lists:map(
-                fun(Elem) ->
-                    case Elem == SmallestElement of
-                        true -> NewElement;
-                        false -> Elem
-                    end
-                end,
-                List
-            )
+            false
+        %false ->
+        % Trova l'elemento con Last_time più piccolo
+        %   {_, SmallestElement} =
+        %      lists:foldl(
+        %         fun(Elem = {_, _, _, LastTime}, {MinTime, MinElem}) ->
+        %            case LastTime < MinTime of
+        %               true -> {LastTime, Elem};
+        %              false -> {MinTime, MinElem}
+        %         end
+        %    end,
+        %   % Valori iniziali
+        %  {infinity, undefined},
+        % List
+        %),
+        % Rimpiazza l'elemento con Last_time più piccolo con il nuovo elemento
+        %lists:map(
+        %   fun(Elem) ->
+        %      case Elem == SmallestElement of
+        %         true -> NewElement;
+        %        false -> Elem
+        %   end
+        % end,
+        % List
+        %)
+    end.
+
+% funzione per implementare il controllo se i nodi
+% della K_buckets sono ancora raggiungibili o meno (non asincrona)
+send_isAlive(List) ->
+    % Crea una lista di PIDs da inviare per il ping
+    Pids = [Pid || {_, _, Pid, _} <- List],
+
+    % Spawna un processo per ciascun nodo
+    lists:foreach(
+        fun(Pid) ->
+            spawn(fun() -> ping_node(Pid, self()) end)
+        end,
+        Pids
+    ),
+
+    % Aspetta la risposta dai nodi con un timeout non bloccante
+    FilteredPids = receive_isAlive(length(Pids), []),
+
+    % Filtro della lista K_buckets, mantenendo solo i nodi vivi
+    FilteredBuckets = lists:filter(
+        fun({_, _, Pid, _}) ->
+            lists:member(Pid, FilteredPids)
+        end,
+        List
+    ),
+
+    FilteredBuckets.
+
+% Funzione per inviare il ping a un singolo nodo e attendere la risposta
+ping_node(Pid, From) ->
+    Pid ! {pingTo, From},
+    receive
+        {ok} -> From ! {isAlive, Pid};
+        {notAlive, _} -> From ! {notAlive, Pid}
+        % Timeout di 1 secondo
+    after 1000 -> From ! {notAlive, Pid}
+    end.
+
+% Funzione di raccolta delle risposte
+receive_isAlive(0, AliveNodes) ->
+    AliveNodes;
+receive_isAlive(N, AliveNodes) ->
+    receive
+        {isAlive, Pid} -> receive_isAlive(N - 1, [Pid | AliveNodes]);
+        {notAlive, _} -> receive_isAlive(N - 1, AliveNodes)
+        % Timeout di 1 secondo per ciascun nodo
+    after 1000 -> receive_isAlive(N - 1, AliveNodes)
     end.

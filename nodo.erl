@@ -38,16 +38,19 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                 Id, Storage, K_buckets, Timer
             ]),
             node_behavior({Id, Storage, K_buckets, Timer});
-        {getInfo, id, From} ->
-            From ! {getId, Id},
-            node_behavior({Id, Storage, K_buckets, Timer});
         % messaggio utilizzato per la gestione della K_buckets dinamica
         {isAlive, Pid, OtherId} ->
             % controllo se è possibile inserire elementi
             % nella propria K_buckets
             case length(K_buckets) < 4 of
-                true -> NewKB = [{binary_xor(Id, OtherId), OtherId, Pid, 0}] ++ K_buckets;
-                false -> NewKB = K_buckets
+                true ->
+                    NewKB_tmp = {binary_xor(Id, OtherId), OtherId, Pid, 0},
+                    case lists:any(fun({_, _, X, _}) -> X == Pid end, K_buckets) of
+                        false -> NewKB = [NewKB_tmp] ++ K_buckets;
+                        true -> NewKB = K_buckets
+                    end;
+                false ->
+                    NewKB = K_buckets
             end,
             Pid ! {alive, self()},
             node_behavior({Id, Storage, NewKB, Timer});
@@ -95,40 +98,16 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             timer:send_after(30000, self(), {send_periodic}),
             % la nuova k_buckets è composta solamente dai nodi che hanno risposto al ping
             node_behavior({Id, Storage, K_buckets, Timer});
-        % messaggio per ricevere un ping, se conosce il Pid del processo Erlang
-        % utilizzato per cavpire se un nodo è vivo o meno
-        {pingTo, To} ->
-            To ! {ok},
-            node_behavior({Id, Storage, K_buckets, Timer});
-        % messaggio per cambiare il last_ping del nodo
-        {changeTimer, T, FromTo} ->
-            % il nodo che deve aggioranre il timer, vuol dire che ha ricevuto
-            % un ping, quindi deve aggiornare la sua K_buckets,
-            % modificando il campo last_ping in corrispondenza
-            % di FromTo
-            UpdatedBuckets = lists:map(
-                fun
-                    ({Distance, Id_tmp, Pid, _}) when Pid =:= FromTo ->
-                        % Aggiorna last_ping con T
-                        {Distance, Id_tmp, Pid, T};
-                    (Node) ->
-                        % Lascia inalterati gli altri nodi
-                        Node
-                end,
-                K_buckets
-            ),
-            node_behavior({Id, Storage, UpdatedBuckets, T});
         % nuovo comportamento del ping
-        {ping, Id, From} ->
+        {ping, Id, From, StartTime} ->
             io:format("[PING] PONG\n", []),
-            CurrentTime = erlang:system_time(microsecond),
             [H | _] = From,
-            H ! {ping_result, trovato, CurrentTime, self()},
+            H ! {ping_result, trovato, StartTime, self()},
             node_behavior({Id, Storage, K_buckets, Timer});
         % messaggio per effettuare un ping tramite l'identificativo della
         % rete kademlia
-        {ping, TargetId, From} ->
-            StartTime = erlang:system_time(microsecond),
+        {ping, TargetId, From, T} ->
+            %StartTime = erlang:system_time(microsecond),
             % cerco se è gia' presente nei propri k_buckets
             [H | _] = From,
             %% check 2
@@ -153,28 +132,25 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                                 ]
                             ),
                             % Invio della richiesta al nodo più vicino (bloccante per 5 secondi)
-                            send_ping_node(ClosestPid, TargetId, From, 5)
+                            send_ping_node(ClosestPid, TargetId, From, 5, T)
                     end,
                     node_behavior({Id, Storage, K_buckets, Timer});
                 {_, _, ClosestPidInit, _} ->
                     % Nodo trovato, restituisci il risultato all'indietro
-                    EndTime = erlang:system_time(microsecond),
-                    io:format("[PING] Tempo impiegato per trovare un nodo: ~ps\n", [
-                        EndTime - StartTime
-                    ]),
-                    ClosestPidInit ! {ping, TargetId, [self()] ++ From},
+                    ClosestPidInit ! {ping, TargetId, [self()] ++ From, T},
                     node_behavior({Id, Storage, K_buckets, Timer})
             end;
         % messaggio per segnalare che il ping è avvenuto con successo
-        {ping_result, trovato, CurrentTime, Pid} ->
-            io:format("PONG", []),
+        {ping_result, trovato, StartTime, Pid} ->
+            EndTime = erlang:system_time(microsecond),
+            io:format("PONG !!! in ~p [microsenci]\n", [EndTime - StartTime]),
             % devo aggiornare anche il mio campo della K_buckets
             % perchè ho verificato che un nodo sia raggiungibile
             UpdatedBuckets = lists:map(
                 fun
                     ({Distance, Id_tmp, OtherPid, _}) when OtherPid =:= Pid ->
                         % Aggiorna last_ping con T
-                        {Distance, Id_tmp, Pid, CurrentTime};
+                        {Distance, Id_tmp, Pid, StartTime};
                     (Node) ->
                         % Lascia inalterati gli altri nodi
                         Node
@@ -194,26 +170,18 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
         % aggiorna i buckets del nodo corrente
         {newBuckets, Lista} ->
             node_behavior({Id, Storage, Lista, Timer});
-        % aggiorna i buckets durante il ping
-        {newBuckets, ping, Pid, Lista} ->
-            % Verifica se esiste una tupla con OtherPid == Pid
-            Exists = lists:any(
-                fun({_, _, OtherPid, _}) ->
-                    OtherPid == Pid
-                end,
-                K_buckets
-            ),
-            case Exists of
-                true -> node_behavior({Id, Storage, Lista, Timer});
-                _ -> node_behavior({Id, Storage, K_buckets, Timer})
-            end;
+        % messaggio per insserire un nuovo elemento nello store
         {store, Value} ->
+            StartTime = erlang:system_time(microsecond),
             Key = crypto:hash(sha, Value),
             NewStorage = [[Key, Value] | Storage],
+            EndTime = erlang:system_time(microsecond),
+            % io:format("Valore aggiunto in ~p [microsecondi]", [EndTime - StartTime]),
             node_behavior({Id, NewStorage, K_buckets, Timer});
-        % messaggio per aggiungere elementi al mio store se non
+        % messaggio per aggiungere elementi al mio store (ricevuti da altri nodi) se non
         % sono gia' presenti
         {addToStore, MoreStore} ->
+            StartTime = erlang:system_time(microsecond),
             % Filtra gli elementi di MoreStore che non sono già presenti in Storage
             FilteredStore = lists:filter(
                 fun(Element) -> not lists:member(Element, Storage) end,
@@ -221,9 +189,9 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             ),
             % Aggiungi solo gli elementi filtrati a Storage
             NewStorage = FilteredStore ++ Storage,
+            EndTime = erlang:system_time(microsecond),
             node_behavior({Id, NewStorage, K_buckets, Timer});
         % messaggio per trovare un nodo, dato il suo Id
-
         % ultimo paramentro è il tempo
         {find_node, TargetId, From, T} ->
             % StartTime = erlang:system_time(microsecond),
@@ -270,7 +238,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                 FoundId, FoundPid, EndTime - StartTime
             ]),
             node_behavior({Id, Storage, K_buckets, Timer});
-        {find_value, Key, From} ->
+        {find_value, Key, From, T} ->
             % From è una lista
             [H | _] = From,
             % Controlla prima nel proprio storage
@@ -287,7 +255,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             case MyStorage of
                 [Key, Value] ->
                     % Trovato nel proprio storage, restituisci il valore
-                    H ! {value_found, Key, Value};
+                    H ! {value_found, Key, Value, T};
                 [] ->
                     % Non trovato, inoltra al primo nodo nei k_buckets più vicino alla chiave
                     case K_buckets of
@@ -299,13 +267,16 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                             {_, _, ClosestPid, _} = find_closest(Key, K_buckets),
                             % Inoltra al nodo più vicino, rispetto alla chiave
                             % ClosestPid ! {find_value, Key, From} FUNZIONA MA NON è BLOCCANTE
-                            send_find_value(ClosestPid, Key, From, 5)
+                            send_find_value(ClosestPid, Key, From, 5, T)
                     end
             end,
             node_behavior({Id, Storage, K_buckets, Timer});
         % Quando riceve un valore trovato
-        {value_found, Key, Value} ->
-            io:format("Valore trovato: ~p -> ~p~n\n", [Key, Value]),
+        {value_found, Key, Value, StartTime} ->
+            EndTime = erlang:system_time(microsecond),
+            io:format("Valore trovato: ~p -> ~p in ~p [microsecondi] ~n\n", [
+                Key, Value, EndTime - StartTime
+            ]),
             node_behavior({Id, Storage, K_buckets, Timer});
         % Quando il valore non è stato trovato
         {value_not_found, Key} ->
@@ -337,25 +308,25 @@ send_find_node(Pid, TargetId, From, Timeout, StartTime) ->
     end.
 
 % funzione per propagare il ping (bloccante)
-send_ping_node(Pid, TargetId, From, Timeout) ->
+send_ping_node(Pid, TargetId, From, Timeout, StartTime) ->
     [H | _] = From,
-    Pid ! {ping, TargetId, [self()] ++ From},
+    Pid ! {ping, TargetId, [self()] ++ From, StartTime},
     receive
-        {ping_result, trovato, CurrentTime, RPid} ->
+        {ping_result, trovato, CurrentTime, RPid, StartTime} ->
             io:format("[PING] La funzione ha ricevuto con successo e non è stata bloccata\n", []),
-            H ! {ping_result, trovato, CurrentTime, RPid}
+            H ! {ping_result, trovato, CurrentTime, RPid, StartTime}
     after Timeout * 1000 ->
         io:format("Timeout dopo ~p secondi: Nessuna risposta dal nodo ~p~n", [Timeout, Pid]),
         H ! {ping_result, not_found}
     end.
 
 % funzione per propagare il find_value (bloccante)
-send_find_value(Pid, Key, From, Timeout) ->
+send_find_value(Pid, Key, From, Timeout, StartTime) ->
     [H | _] = From,
-    Pid ! {find_value, Key, [self()] ++ From},
+    Pid ! {find_value, Key, [self()] ++ From, StartTime},
     receive
-        {value_found, Key, Value} ->
-            H ! {value_found, Key, Value};
+        {value_found, Key, Value, StartTime} ->
+            H ! {value_found, Key, Value, StartTime};
         {value_not_found, Key} ->
             H ! {value_not_found, Key}
     after Timeout * 1000 ->
@@ -401,95 +372,4 @@ binary_xor(Bin1, Bin2) when is_binary(Bin1), is_binary(Bin2) ->
             );
         false ->
             erlang:error(badarith)
-    end.
-
-%funzione isalive
-send_is_alive(Pid, FromTo) ->
-    Pid ! {pingTo, FromTo},
-    receive
-        {ok} -> true
-    after 5000 ->
-        false
-    end.
-
-% funzione per aggiornare la K_buckets, da chi riceve il ping
-update_buckets_after_ping(List, NewElement) ->
-    case length(List) < 4 of
-        true ->
-            % Se ci sono meno di 4 elementi, aggiungi semplicemente il nuovo elemento
-            [NewElement] ++ List;
-        false ->
-            false
-        %false ->
-        % Trova l'elemento con Last_time più piccolo
-        %   {_, SmallestElement} =
-        %      lists:foldl(
-        %         fun(Elem = {_, _, _, LastTime}, {MinTime, MinElem}) ->
-        %            case LastTime < MinTime of
-        %               true -> {LastTime, Elem};
-        %              false -> {MinTime, MinElem}
-        %         end
-        %    end,
-        %   % Valori iniziali
-        %  {infinity, undefined},
-        % List
-        %),
-        % Rimpiazza l'elemento con Last_time più piccolo con il nuovo elemento
-        %lists:map(
-        %   fun(Elem) ->
-        %      case Elem == SmallestElement of
-        %         true -> NewElement;
-        %        false -> Elem
-        %   end
-        % end,
-        % List
-        %)
-    end.
-
-% funzione per implementare il controllo se i nodi
-% della K_buckets sono ancora raggiungibili o meno (non asincrona)
-send_isAlive(List) ->
-    % Crea una lista di PIDs da inviare per il ping
-    Pids = [Pid || {_, _, Pid, _} <- List],
-
-    % Spawna un processo per ciascun nodo
-    lists:foreach(
-        fun(Pid) ->
-            spawn(fun() -> ping_node(Pid, self()) end)
-        end,
-        Pids
-    ),
-
-    % Aspetta la risposta dai nodi con un timeout non bloccante
-    FilteredPids = receive_isAlive(length(Pids), []),
-
-    % Filtro della lista K_buckets, mantenendo solo i nodi vivi
-    FilteredBuckets = lists:filter(
-        fun({_, _, Pid, _}) ->
-            lists:member(Pid, FilteredPids)
-        end,
-        List
-    ),
-
-    FilteredBuckets.
-
-% Funzione per inviare il ping a un singolo nodo e attendere la risposta
-ping_node(Pid, From) ->
-    Pid ! {pingTo, From},
-    receive
-        {ok} -> From ! {isAlive, Pid};
-        {notAlive, _} -> From ! {notAlive, Pid}
-        % Timeout di 1 secondo
-    after 1000 -> From ! {notAlive, Pid}
-    end.
-
-% Funzione di raccolta delle risposte
-receive_isAlive(0, AliveNodes) ->
-    AliveNodes;
-receive_isAlive(N, AliveNodes) ->
-    receive
-        {isAlive, Pid} -> receive_isAlive(N - 1, [Pid | AliveNodes]);
-        {notAlive, _} -> receive_isAlive(N - 1, AliveNodes)
-        % Timeout di 1 secondo per ciascun nodo
-    after 1000 -> receive_isAlive(N - 1, AliveNodes)
     end.

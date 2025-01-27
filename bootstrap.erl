@@ -117,6 +117,7 @@ bootstrap_node_loop(Id, Role) ->
             exit(errore);
         % Fallimento di uno dei nodi (NON FUNZIONA, STESSO PRINCIPIO DI QUANDO LI LINKO LA PRIMA VOLTA...)
         {'EXIT', _, _Reason} ->
+            StartTime = erlang:system_time(microsecond),
             io:format("ricevuto exit....", []),
             case Role of
                 primary ->
@@ -128,6 +129,8 @@ bootstrap_node_loop(Id, Role) ->
                         bootstrap_node_loop(rand:uniform(1 bsl 160 - 1), backup)
                     end),
                     global:register_name(backup_bootstrap, NewBackupPid),
+                    EndTime = erlang:system_time(microsecond),
+                    io:format("Backup ricreato in ~p [microsendi]", [EndTime - StartTime]),
                     bootstrap_node_loop(Id, primary);
                 backup ->
                     % il principale è morto
@@ -142,6 +145,8 @@ bootstrap_node_loop(Id, Role) ->
                         bootstrap_node_loop(rand:uniform(1 bsl 160 - 1), backup)
                     end),
                     global:register_name(backup_bootstrap, NewBackupPid),
+                    EndTime = erlang:system_time(microsecond),
+                    io:format("Principale ricreato in ~p [microsendi]", [EndTime - StartTime]),
                     bootstrap_node_loop(Id, primary)
             end;
         % messaggio generico
@@ -189,7 +194,7 @@ get_4_buckets(NodeId) ->
                     false ->
                         % Calcola la distanza XOR e aggiungi alla lista
                         %Distance = NodeId bxor Id,
-                        Distance = calculate_distance(NodeId, Id),
+                        Distance = binary_xor(NodeId, Id),
                         Acc ++ [{Distance, Id, Pid, L}]
                 end
             end,
@@ -224,12 +229,26 @@ get_4_buckets(NodeId) ->
             lists:sublist(UniqueNodes, 4)
     end.
 
-%%% Funzione per calcolare la distanza tra due binari
-calculate_distance(Bin1, Bin2) when is_binary(Bin1), is_binary(Bin2) ->
-    calculate_distance(binary:bin_to_list(Bin1), binary:bin_to_list(Bin2));
-calculate_distance([Byte1 | Rest1], [Byte2 | Rest2]) ->
-    abs(Byte1 - Byte2) + calculate_distance(Rest1, Rest2);
-calculate_distance([], []) ->
-    0;
-calculate_distance(_, _) ->
-    erlang:error({badarg, "Binary lengths must match"}).
+%%% Funzione per calcolare la distanza tra due binari (VERSIONE VECCHIA)
+%calculate_distance(Bin1, Bin2) when is_binary(Bin1), is_binary(Bin2) ->
+%    calculate_distance(binary:bin_to_list(Bin1), binary:bin_to_list(Bin2));
+%calculate_distance([Byte1 | Rest1], [Byte2 | Rest2]) ->
+%    abs(Byte1 - Byte2) + calculate_distance(Rest1, Rest2);
+%calculate_distance([], []) ->
+%    0;
+%calculate_distance(_, _) ->
+%    erlang:error({badarg, "Binary lengths must match"}).
+
+binary_xor(Bin1, Bin2) when is_binary(Bin1), is_binary(Bin2) ->
+    case byte_size(Bin1) == byte_size(Bin2) of
+        true ->
+            lists:foldl(
+                fun({Byte1, Byte2}, Acc) ->
+                    Acc bsl 8 bor (Byte1 bxor Byte2)
+                end,
+                0,
+                lists:zip(binary:bin_to_list(Bin1), binary:bin_to_list(Bin2))
+            );
+        false ->
+            erlang:error(badarith)
+    end.

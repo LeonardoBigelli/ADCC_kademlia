@@ -1,3 +1,4 @@
+% interfaccia per gestire i nodi Bootstrap
 -module(bootstrap).
 -include_lib("stdlib/include/qlc.hrl").
 
@@ -72,7 +73,6 @@ bootstrap_node_loop(Id, Role) ->
                     % assegnazione dell'Id e della K_buckets al nodo che entra
                     Buckets = get_4_buckets(NodeId),
                     From ! {refresh, {NodeId, Buckets}},
-                    % serve il codice per aggiornare tutti i nodi vecchi
                     % Recupera tutti i nodi dalla tabella mnesia, escluso il nodo appena aggiunto
                     % solo se ci sono > 1 nodi
                     AllNodes = all(),
@@ -112,10 +112,10 @@ bootstrap_node_loop(Id, Role) ->
         {print} ->
             print_all(),
             bootstrap_node_loop(Id, Role);
-        % messaggio per far morirre il nodo
+        % messaggio per far morire il nodo
         {crash} ->
             exit(errore);
-        % Fallimento di uno dei nodi (NON FUNZIONA, STESSO PRINCIPIO DI QUANDO LI LINKO LA PRIMA VOLTA...)
+        % Fallimento di uno dei nodi
         {'EXIT', _, _Reason} ->
             StartTime = erlang:system_time(microsecond),
             io:format("ricevuto exit....", []),
@@ -125,9 +125,11 @@ bootstrap_node_loop(Id, Role) ->
                     io:format(
                         "Il nodo di backup è morto. Creazione di un nuovo nodo di backup.~n"
                     ),
+                    % spawn e link del nuovo nodo di backup
                     NewBackupPid = spawn_link(node(), fun() ->
                         bootstrap_node_loop(rand:uniform(1 bsl 160 - 1), backup)
                     end),
+                    % registrazione del nodo nuovo
                     global:register_name(backup_bootstrap, NewBackupPid),
                     EndTime = erlang:system_time(microsecond),
                     io:format("Backup ricreato in ~p [microsendi]", [EndTime - StartTime]),
@@ -137,13 +139,16 @@ bootstrap_node_loop(Id, Role) ->
                     io:format(
                         "Il nodo principale è morto. Divento il nuovo principale e creo un nuovo backup.~n"
                     ),
+                    % de-registrazione del nodo di backup (perche' diventa il principale)
                     global:unregister_name(backup_bootstrap),
+                    % registrazione come principale
                     global:register_name(bootstrap, self()),
 
-                    % Creazione del nuovo nodo di backup
+                    % Creazione del nuovo nodo di backup, con la spawn e il link
                     NewBackupPid = spawn_link(node(), fun() ->
                         bootstrap_node_loop(rand:uniform(1 bsl 160 - 1), backup)
                     end),
+                    % registrazione del nuovo nodo creato, come backup
                     global:register_name(backup_bootstrap, NewBackupPid),
                     EndTime = erlang:system_time(microsecond),
                     io:format("Principale ricreato in ~p [microsendi]", [EndTime - StartTime]),
@@ -193,7 +198,6 @@ get_4_buckets(NodeId) ->
                         Acc;
                     false ->
                         % Calcola la distanza XOR e aggiungi alla lista
-                        %Distance = NodeId bxor Id,
                         Distance = binary_xor(NodeId, Id),
                         Acc ++ [{Distance, Id, Pid, L}]
                 end
@@ -216,32 +220,28 @@ get_4_buckets(NodeId) ->
             SortedRecords;
         _ ->
             % Almeno due nodi nella rete
+            % considero i primi due più vicini
             ClosestTwo = lists:sublist(SortedRecords, 2),
             TotalNodes = length(SortedRecords),
+            % il nodo a distanza intermedia
             MiddleNodeIndex =
                 case TotalNodes > 2 of
                     true -> round(TotalNodes / 2);
                     false -> 1
                 end,
             MiddleNode = lists:nth(MiddleNodeIndex, SortedRecords),
+            % il nodo con distanza maggiore (l'ultimo della lista)
             FarthestNode = lists:last(SortedRecords),
             UniqueNodes = lists:usort(ClosestTwo ++ [MiddleNode, FarthestNode]),
             lists:sublist(UniqueNodes, 4)
     end.
 
-%%% Funzione per calcolare la distanza tra due binari (VERSIONE VECCHIA)
-%calculate_distance(Bin1, Bin2) when is_binary(Bin1), is_binary(Bin2) ->
-%    calculate_distance(binary:bin_to_list(Bin1), binary:bin_to_list(Bin2));
-%calculate_distance([Byte1 | Rest1], [Byte2 | Rest2]) ->
-%    abs(Byte1 - Byte2) + calculate_distance(Rest1, Rest2);
-%calculate_distance([], []) ->
-%    0;
-%calculate_distance(_, _) ->
-%    erlang:error({badarg, "Binary lengths must match"}).
-
+% funzione per calcolare la distanza XOR tra due binari di 160 bit
 binary_xor(Bin1, Bin2) when is_binary(Bin1), is_binary(Bin2) ->
+    % controllo se i due binari hanno o meno la stessa lunghezza
     case byte_size(Bin1) == byte_size(Bin2) of
         true ->
+            % calcolo la distanza effettiva, bit a bit
             lists:foldl(
                 fun({Byte1, Byte2}, Acc) ->
                     Acc bsl 8 bor (Byte1 bxor Byte2)

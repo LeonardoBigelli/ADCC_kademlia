@@ -1,10 +1,10 @@
 % interfaccia per gestire i nodi kademlia
-
 -module(nodo).
 -include_lib("stdlib/include/qlc.hrl").
 
-% interfaccie da esportare
+% interfaccia da esportare
 -export([new_kademlia_node/1]).
+
 % creazione di un nuovo nodo
 new_kademlia_node(P) ->
     % valore casuale (stringa)
@@ -45,6 +45,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             case length(K_buckets) < 4 of
                 true ->
                     NewKB_tmp = {binary_xor(Id, OtherId), OtherId, Pid, 0},
+                    % controllo se quel Pid è già presente nella mia K_buckets
                     case lists:any(fun({_, _, X, _}) -> X == Pid end, K_buckets) of
                         false -> NewKB = [NewKB_tmp] ++ K_buckets;
                         true -> NewKB = K_buckets
@@ -57,6 +58,8 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
         % messaggio utilizzato per la gestione della K_buckets dinamica
         % rimozione dei nodi morti
         {updateB, Pid} ->
+            % Controllo tutta la K_buckets e rimuovo il nodo con il Pid in
+            % questione
             NewKB = lists:foldr(
                 fun({A, B, C, D}, Acc) ->
                     case C of
@@ -71,7 +74,11 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             node_behavior({Id, Storage, NewKB, Timer});
         % messaggio per l'invio periodico dello Storage ai suoi nodi della k_buckets
         {send_periodic} ->
+            % salvo chi ha invocato il messaggio
             Self = self(),
+            % effettuo una spawn, per evitare di bloccare il nodo,
+            % con lo scopo di controllare se i nodi presenti nella
+            % propria K_buckets sono ancora raggiungibili
             lists:foreach(
                 fun({_, OtherId, Pid, _}) ->
                     spawn(
@@ -79,6 +86,8 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                             Pid ! {isAlive, self(), OtherId},
                             receive
                                 {alive, Pid} -> ok
+                                % se non è raggiungibile,
+                                % viene rimosso
                             after 5000 -> Self ! {updateB, Pid}
                             end
                         end
@@ -89,16 +98,15 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             % Invia un messaggio a tutti i nodi nei K_buckets
             lists:foreach(
                 fun({_, _, Pid, _}) ->
-                    %io:format("Inoltro dello Storage...", []),
                     Pid ! {addToStore, Storage}
                 end,
                 K_buckets
             ),
             % Avvia il prossimo ciclo dopo 30 secondi
             timer:send_after(30000, self(), {send_periodic}),
-            % la nuova k_buckets è composta solamente dai nodi che hanno risposto al ping
             node_behavior({Id, Storage, K_buckets, Timer});
-        % nuovo comportamento del ping
+        % Ping che sfrutta il pattern matching, se l'Id da cercare è il nodo stesso
+        % restituisce che è stato trovato
         {ping, Id, From, StartTime} ->
             io:format("[PING] PONG\n", []),
             [H | _] = From,
@@ -110,21 +118,20 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             %StartTime = erlang:system_time(microsecond),
             % cerco se è gia' presente nei propri k_buckets
             [H | _] = From,
-            %% check 2
             case lists:keyfind(TargetId, 2, K_buckets) of
                 false ->
-                    % CHECK: se ClosestPid == From -> find_closest(TargetId, (K_buckets - closestPid)
+                    % elimino i nodi a cui inoltrare il messaggio
+                    % che sono già stati visitati
                     Bucktes_noLoop = lists:filter(
                         fun({_, _, X, _}) -> not lists:member(X, From) end, K_buckets
                     ),
-                    % Nodo non trovato localmente, inoltra al nodo più vicino
+                    % inoltro al nodo più vicino
                     ClosestNode = find_closest(TargetId, Bucktes_noLoop),
                     case ClosestNode of
                         undefined ->
                             % Nessun nodo disponibile nei k-buckets
                             H ! {ping_result, not_found};
                         {_, _, ClosestPid, _} ->
-                            % CHECK: se ClosestPid == From -> find_closest(TargetId, (K_buckets - closestPid)
                             io:format(
                                 "[PING] Nodo più vicino trovato: ~p. Inoltro la richiesta...~n\n",
                                 [
@@ -136,7 +143,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                     end,
                     node_behavior({Id, Storage, K_buckets, Timer});
                 {_, _, ClosestPidInit, _} ->
-                    % Nodo trovato, restituisci il risultato all'indietro
+                    % Nodo trovato, restituisci il risultato al nodo precedente
                     ClosestPidInit ! {ping, TargetId, [self()] ++ From, T},
                     node_behavior({Id, Storage, K_buckets, Timer})
             end;
@@ -145,7 +152,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
             EndTime = erlang:system_time(microsecond),
             io:format("PONG !!! in ~p [microsenci]\n", [EndTime - StartTime]),
             % devo aggiornare anche il mio campo della K_buckets
-            % perchè ho verificato che un nodo sia raggiungibile
+            % perchè ho verificato che un nodo sia raggiungibile (DA TOGLIERE CON IL TIMER)
             UpdatedBuckets = lists:map(
                 fun
                     ({Distance, Id_tmp, OtherPid, _}) when OtherPid =:= Pid ->
@@ -173,6 +180,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
         % messaggio per insserire un nuovo elemento nello store
         {store, Value} ->
             StartTime = erlang:system_time(microsecond),
+            % calcolo della chiave sul valore da inserire
             Key = crypto:hash(sha, Value),
             NewStorage = [[Key, Value] | Storage],
             EndTime = erlang:system_time(microsecond),
@@ -196,21 +204,22 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
         {find_node, TargetId, From, T} ->
             % StartTime = erlang:system_time(microsecond),
             [H | _] = From,
-            %% check 2
+            % controllo se il nodo che sto cercando è presente
+            % o meno nella mia K_buckets
             case lists:keyfind(TargetId, 2, K_buckets) of
                 false ->
-                    % CHECK: se ClosestPid == From -> find_closest(TargetId, (K_buckets - closestPid)
+                    % elimino i nodi a cui inoltrare il messaggio
+                    % che sono già stati visitati
                     Bucktes_noLoop = lists:filter(
                         fun({_, _, X, _}) -> not lists:member(X, From) end, K_buckets
                     ),
-                    % Nodo non trovato localmente, inoltra al nodo più vicino
+                    % inoltro al nodo più vicino
                     ClosestNode = find_closest(TargetId, Bucktes_noLoop),
                     case ClosestNode of
                         undefined ->
                             % Nessun nodo disponibile nei k-buckets
                             H ! {find_result, not_found};
                         {_, _, ClosestPid, _} ->
-                            % CHECK: se ClosestPid == From -> find_closest(TargetId, (K_buckets - closestPid)
                             io:format(
                                 "Nodo più vicino trovato: ~p. Inoltro la richiesta...~n", [
                                     ClosestPid
@@ -221,15 +230,14 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                     end,
                     node_behavior({Id, Storage, K_buckets, Timer});
                 {_, FoundId, FoundPid, _} ->
-                    % Nodo trovato, restituisci il risultato all'indietro
+                    % Nodo trovato, restituisci il risultato al nodo chiamante
                     %EndTime = erlang:system_time(microsecond),
-                    %io:format("Tempo impiegato per trovare un nodo: ~ps\n", [EndTime - StartTime]),
                     H ! {find_result, FoundId, FoundPid, T},
                     node_behavior({Id, Storage, K_buckets, Timer})
             end;
+        % messaggio per segnalare che non è stato trovato il nodo
         {find_result, not_found} ->
             io:format("Nodo non trovato\n", []),
-            % ricerca di un valore nello storage data la key associata al valore
             node_behavior({Id, Storage, K_buckets, Timer});
         % Quando il nodo corrente riceve il risultato della ricerca
         {find_result, FoundId, FoundPid, StartTime} ->
@@ -238,6 +246,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                 FoundId, FoundPid, EndTime - StartTime
             ]),
             node_behavior({Id, Storage, K_buckets, Timer});
+        % messaggio per cercare un valore data la chiave
         {find_value, Key, From, T} ->
             % From è una lista
             [H | _] = From,
@@ -257,7 +266,7 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                     % Trovato nel proprio storage, restituisci il valore
                     H ! {value_found, Key, Value, T};
                 [] ->
-                    % Non trovato, inoltra al primo nodo nei k_buckets più vicino alla chiave
+                    % Valore non on trovato, inoltra al primo nodo nei k_buckets più vicino alla chiave
                     case K_buckets of
                         [] ->
                             % Nessun nodo disponibile, restituisci not_found
@@ -266,23 +275,23 @@ node_behavior({Id, Storage, K_buckets, Timer}) ->
                         _ ->
                             {_, _, ClosestPid, _} = find_closest(Key, K_buckets),
                             % Inoltra al nodo più vicino, rispetto alla chiave
-                            % ClosestPid ! {find_value, Key, From} FUNZIONA MA NON è BLOCCANTE
                             send_find_value(ClosestPid, Key, From, 5, T)
                     end
             end,
             node_behavior({Id, Storage, K_buckets, Timer});
-        % Quando riceve un valore trovato
+        % messaggio scambiato segnalando che il valore da cercare
+        % è stato trovato
         {value_found, Key, Value, StartTime} ->
             EndTime = erlang:system_time(microsecond),
             io:format("Valore trovato: ~p -> ~p in ~p [microsecondi] ~n\n", [
                 Key, Value, EndTime - StartTime
             ]),
             node_behavior({Id, Storage, K_buckets, Timer});
-        % Quando il valore non è stato trovato
+        % messaggio scambiato quando il valore non è stato trovato
         {value_not_found, Key} ->
             io:format("Valore non trovato per chiave: ~p~n", [Key]),
             node_behavior({Id, Storage, K_buckets, Timer});
-        % messaggio per far morire un nodo
+        % messaggio per far morire un nodo, genera una 'exit'
         {crash} ->
             exit(errore);
         % comportamento generico
@@ -295,11 +304,10 @@ send_find_node(Pid, TargetId, From, Timeout, StartTime) ->
     [H | _] = From,
     % Invia il messaggio find_node al nodo destinazione
     Pid ! {find_node, TargetId, [self()] ++ From, StartTime},
-    % Imposta il timeout
     receive
         {find_result, FoundId, FoundPid, StartTime} ->
             H ! {find_result, FoundId, FoundPid, StartTime};
-        % se non lo trova
+        % nel caso del nodo non trovato
         {find_result, not_found} ->
             H ! {find_result, not_found}
     after Timeout * 1000 ->
@@ -346,7 +354,7 @@ find_closest(TargetId, K_bucketsTMP) ->
                 fun({Distance1, _, _, _}, {Distance2, _, _, _}) ->
                     Distance1 < Distance2
                 end,
-                %[{TargetId bxor Id, Id, Pid, LastPing} || {_, Id, Pid, LastPing} <- K_buckets]% da trasaformare in map
+                % calcolo della distanza
                 lists:map(
                     fun({_, Id, Pid, LastPing}) ->
                         {binary_xor(TargetId, Id), Id, Pid, LastPing}

@@ -10,6 +10,14 @@
 % inizializzazione della rete di kademlia con la
 % creazione del nodo boostrapt
 start_system(P) ->
+    % Fermare Mnesia (opzionale, per evitare conflitti)
+    mnesia:stop(),
+    % Eliminare la tabella esistente
+    case mnesia:delete_table(bootstrap_table) of
+        {aborted, _} -> io:format("--[Sistema pronto]--~n", []);
+        ok -> io:format("--[Sistema pronto]--~n")
+    end,
+    % ri-creazione della tabella Mnesia
     mnesia:create_schema([node()]),
     mnesia:start(),
     mnesia:create_table(bootstrap_table, [

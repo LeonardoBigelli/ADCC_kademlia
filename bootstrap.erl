@@ -5,7 +5,7 @@
 % interfaccie da esportare
 -export([start_system/1, print_all/0, all/0]).
 % gestione dei record per la tebella di bostrap
--record(bootstrap_table, {id, pid, last_ping}).
+-record(bootstrap_table, {id, pid}).
 
 % inizializzazione della rete di kademlia con la
 % creazione del nodo boostrapt
@@ -73,7 +73,7 @@ bootstrap_node_loop(Id, Role) ->
             % Transazione per aggiungere il nodo nella tabella Mnesia
             case
                 mnesia:transaction(fun() ->
-                    mnesia:write(#bootstrap_table{id = NodeId, pid = From, last_ping = 0})
+                    mnesia:write(#bootstrap_table{id = NodeId, pid = From})
                 end)
             of
                 {_, ok} ->
@@ -85,7 +85,7 @@ bootstrap_node_loop(Id, Role) ->
                     % solo se ci sono > 1 nodi
                     AllNodes = all(),
                     lists:foreach(
-                        fun({_, _, _}) ->
+                        fun({_, _}) ->
                             case length(AllNodes) of
                                 1 ->
                                     % Se la lista ha un solo elemento
@@ -94,7 +94,7 @@ bootstrap_node_loop(Id, Role) ->
                                     % Per ogni nodo vicino a quello appena inserito,
                                     % ricalcola i 4 nodi più vicini
                                     lists:foreach(
-                                        fun({_, Id_tmp, Pid, _}) ->
+                                        fun({_, Id_tmp, Pid}) ->
                                             % Calcola i 4 nodi più vicini per questo nodo
                                             Buckets_tmp = get_4_buckets(Id_tmp),
 
@@ -171,22 +171,22 @@ bootstrap_node_loop(Id, Role) ->
 % funzione invocata per visualizzare il contenuto dello schema di mnesia,
 % solo il nodo Bootstrap può invocarla
 print_all() ->
-    Print = fun(#bootstrap_table{id = Id, pid = Pid, last_ping = L}, Acc) ->
-        Acc ++ [{Id, Pid, L}]
+    Print = fun(#bootstrap_table{id = Id, pid = Pid}, Acc) ->
+        Acc ++ [{Id, Pid}]
     end,
     Tran = fun() -> mnesia:foldr(Print, [], bootstrap_table) end,
     {_, Res} = mnesia:transaction(Tran),
     lists:foreach(
-        fun({Id, Pid, L}) ->
-            io:format(" id:  ~p , pid:  ~p, last ping:  ~p \n", [Id, Pid, L])
+        fun({Id, Pid}) ->
+            io:format(" id:  ~p , pid:  ~p \n", [Id, Pid])
         end,
         Res
     ).
 
 % uguale a print_all() ma restituisce una lista
 all() ->
-    Print = fun(#bootstrap_table{id = Id, pid = Pid, last_ping = L}, Acc) ->
-        Acc ++ [{Id, Pid, L}]
+    Print = fun(#bootstrap_table{id = Id, pid = Pid}, Acc) ->
+        Acc ++ [{Id, Pid}]
     end,
     Tran = fun() -> mnesia:foldr(Print, [], bootstrap_table) end,
     {_, Res} = mnesia:transaction(Tran),
@@ -198,7 +198,7 @@ get_4_buckets(NodeId) ->
     Tran = fun() ->
         % Ottieni tutti i record nella tabella
         mnesia:foldr(
-            fun(#bootstrap_table{id = Id, pid = Pid, last_ping = L}, Acc) ->
+            fun(#bootstrap_table{id = Id, pid = Pid}, Acc) ->
                 % Escludi il nodo chiamante
                 case Id == NodeId of
                     % Non aggiungere il nodo chiamante
@@ -207,7 +207,7 @@ get_4_buckets(NodeId) ->
                     false ->
                         % Calcola la distanza XOR e aggiungi alla lista
                         Distance = binary_xor(NodeId, Id),
-                        Acc ++ [{Distance, Id, Pid, L}]
+                        Acc ++ [{Distance, Id, Pid}]
                 end
             end,
             [],
@@ -217,7 +217,7 @@ get_4_buckets(NodeId) ->
     % Esegui la transazione
     {atomic, AllRecords} = mnesia:transaction(Tran),
     % Ordina per distanza XOR
-    SortedRecords = lists:sort(fun({D1, _, _, _}, {D2, _, _, _}) -> D1 < D2 end, AllRecords),
+    SortedRecords = lists:sort(fun({D1, _, _}, {D2, _, _}) -> D1 < D2 end, AllRecords),
 
     case SortedRecords of
         [] ->

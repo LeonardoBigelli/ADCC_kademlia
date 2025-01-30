@@ -46,7 +46,7 @@ init_bootstrap(Id, Role) ->
 % comportamento del nodo di bootstrap, principale e backup
 bootstrap_node_loop(Id, Role) ->
     % segnalo che è stato avviato con successo
-    io:format("Nodo bootstrap pronto con ID: ~p~n", [Id]),
+    %io:format("Nodo bootstrap pronto con ID: ~p~n", [Id]),
     receive
         % messaggio che definisce il ping al boostrap
         {ping, From} ->
@@ -60,7 +60,7 @@ bootstrap_node_loop(Id, Role) ->
             global:register_name(
                 backup_bootstrap, BackupPid
             ),
-            io:format("Nodo backup del bootstrap creato.", []),
+            io:format("Nodo backup del bootstrap creato.\n", []),
             bootstrap_node_loop(Id, Role);
         % richiesta di un nodo di entrare nella rete
         {enter, From} ->

@@ -149,21 +149,8 @@ node_behavior({Id, Storage, K_buckets}) ->
         % messaggio per segnalare che il ping è avvenuto con successo
         {ping_result, trovato, StartTime, Pid} ->
             EndTime = erlang:system_time(microsecond),
-            io:format("PONG !!! in ~p [microsenci]\n", [EndTime - StartTime]),
-            % devo aggiornare anche il mio campo della K_buckets
-            % perchè ho verificato che un nodo sia raggiungibile (DA TOGLIERE CON IL TIMER)
-            UpdatedBuckets = lists:map(
-                fun
-                    ({Distance, Id_tmp, OtherPid}) when OtherPid =:= Pid ->
-                        % Aggiorna last_ping con T
-                        {Distance, Id_tmp, Pid, StartTime};
-                    (Node) ->
-                        % Lascia inalterati gli altri nodi
-                        Node
-                end,
-                K_buckets
-            ),
-            node_behavior({Id, Storage, UpdatedBuckets});
+            io:format("PONG a ~p !!! in ~p [microsenci]\n", [Pid, EndTime - StartTime]),
+            node_behavior({Id, Storage, K_buckets});
         % messaggio per segnalare che il ping è fallito
         {ping_result, not_found} ->
             %io:format("PANG", []),

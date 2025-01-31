@@ -153,7 +153,7 @@ node_behavior({Id, Storage, K_buckets}) ->
             node_behavior({Id, Storage, K_buckets});
         % messaggio per segnalare che il ping è fallito
         {ping_result, not_found} ->
-            io:format("PANG\n", []),
+            %  io:format("PANG\n", []),
             node_behavior({Id, Storage, K_buckets});
         % modifica del tabella dei k_buckets e dell'id.
         % il messaggio viene ricevuto quando il nodo entra con successo

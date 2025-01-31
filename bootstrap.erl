@@ -135,13 +135,13 @@ bootstrap_node_loop(Id, Role) ->
                     ),
                     % spawn e link del nuovo nodo di backup
                     NewBackupPid = spawn_link(node(), fun() ->
-                        bootstrap_node_loop(rand:uniform(1 bsl 160 - 1), backup)
+                        init_bootstrap(rand:uniform(1 bsl 160 - 1), backup)
                     end),
                     % registrazione del nodo nuovo
                     global:register_name(backup_bootstrap, NewBackupPid),
                     EndTime = erlang:system_time(microsecond),
                     io:format("Backup ricreato in ~p [microsendi]", [EndTime - StartTime]),
-                    bootstrap_node_loop(Id, primary);
+                    init_bootstrap(Id, primary);
                 backup ->
                     % il principale è morto
                     io:format(
@@ -154,13 +154,13 @@ bootstrap_node_loop(Id, Role) ->
 
                     % Creazione del nuovo nodo di backup, con la spawn e il link
                     NewBackupPid = spawn_link(node(), fun() ->
-                        bootstrap_node_loop(rand:uniform(1 bsl 160 - 1), backup)
+                        init_bootstrap(rand:uniform(1 bsl 160 - 1), backup)
                     end),
                     % registrazione del nuovo nodo creato, come backup
                     global:register_name(backup_bootstrap, NewBackupPid),
                     EndTime = erlang:system_time(microsecond),
                     io:format("Principale ricreato in ~p [microsendi]", [EndTime - StartTime]),
-                    bootstrap_node_loop(Id, primary)
+                    init_bootstrap(Id, primary)
             end;
         % messaggio generico
         _ ->

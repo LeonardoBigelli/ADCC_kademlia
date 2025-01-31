@@ -126,7 +126,7 @@ bootstrap_node_loop(Id, Role) ->
         % Fallimento di uno dei nodi
         {'EXIT', _, _Reason} ->
             StartTime = erlang:system_time(microsecond),
-            io:format("ricevuto exit....", []),
+            io:format("ricevuto exit....\n", []),
             case Role of
                 primary ->
                     % il backup è morto
@@ -140,7 +140,7 @@ bootstrap_node_loop(Id, Role) ->
                     % registrazione del nodo nuovo
                     global:register_name(backup_bootstrap, NewBackupPid),
                     EndTime = erlang:system_time(microsecond),
-                    io:format("Backup ricreato in ~p [microsendi]", [EndTime - StartTime]),
+                    io:format("Backup ricreato in ~p [microsecondi]\n", [EndTime - StartTime]),
                     init_bootstrap(Id, primary);
                 backup ->
                     % il principale è morto
@@ -159,7 +159,7 @@ bootstrap_node_loop(Id, Role) ->
                     % registrazione del nuovo nodo creato, come backup
                     global:register_name(backup_bootstrap, NewBackupPid),
                     EndTime = erlang:system_time(microsecond),
-                    io:format("Principale ricreato in ~p [microsendi]", [EndTime - StartTime]),
+                    io:format("Principale ricreato in ~p [microsecondi]\n", [EndTime - StartTime]),
                     init_bootstrap(Id, primary)
             end;
         % messaggio generico

@@ -164,7 +164,7 @@ bootstrap_node_loop(Id, Role) ->
             end;
         % messaggio generico
         _ ->
-            io:format("[[--BOOSTRAP--]] --> Messaggio sconosciuto."),
+            io:format("[[--BOOSTRAP--]] --> Messaggio sconosciuto.\n"),
             bootstrap_node_loop(Id, Role)
     end.
 
